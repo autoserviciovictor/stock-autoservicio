@@ -56,6 +56,7 @@ const {
   listarCatalogoDb,
   buscarCatalogoPorCodigoDb,
   reemplazarCatalogoDb,
+  conTransaccionInventarioProductos,
 } = require("./db-inventario-productos");
 const {
   asegurarEsquemaCatalogoPublico,
@@ -75,6 +76,7 @@ const {
   obtenerImagenCatalogoDb,
   guardarImagenManualCatalogoDb,
   quitarImagenCatalogoDb,
+  sincronizarRubrosImportadosCatalogoDb,
 } = require("./db-catalogo-publico");
 const { buscarImagenProducto, buscarImagenesLote, obtenerImagenNormalizadaProducto, importarImagenManual } = require("./catalogo-imagenes");
 const {
@@ -4293,8 +4295,9 @@ function normalizarProductoImportado(item) {
   const codigo = normalizarCodigo(item?.codigo);
   const articulo = normalizarTexto(item?.articulo);
   const precio = numeroPrecio(item?.precio);
+  const rubro = normalizarTexto(item?.rubro).slice(0, 80);
   if (!codigo || !articulo) return null;
-  return { codigo, articulo, precio };
+  return { codigo, articulo, precio, rubro };
 }
 
 async function ejecutarImportacionProductos(items, aplicarCambios = true) {
@@ -4328,15 +4331,26 @@ async function ejecutarImportacionProductos(items, aplicarCambios = true) {
     );
 
   if (aplicarCambios) {
+    // Los esquemas se crean fuera de la transacción de datos. El reemplazo
+    // del catálogo y la sincronización de rubros se confirman juntos: si una
+    // parte falla, PostgreSQL revierte ambas.
     await asegurarInventarioProductosPostgres();
-    await reemplazarCatalogoDb(catalogo);
+    await asegurarEsquemaCatalogoPublico();
+    await conTransaccionInventarioProductos(async (cliente) => {
+      await reemplazarCatalogoDb(catalogo, cliente);
+      await sincronizarRubrosImportadosCatalogoDb(catalogo, cliente);
+    });
     invalidarCache("productosMaestros");
   }
 
+  const rubros = new Set(catalogo.map((p) => p.rubro).filter(Boolean));
+  const productosSinRubro = catalogo.filter((p) => !p.rubro).length;
   return {
     procesados: catalogo.length,
     totalCatalogo: catalogo.length,
     duplicadosArchivo,
+    rubrosDetectados: rubros.size,
+    productosSinRubro,
     reemplazoCompleto: true,
   };
 }

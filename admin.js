@@ -1877,6 +1877,10 @@ function abrirVistaPreviaImportacion(resumen, archivoNombre) {
     advertencias.push(
       `${resumen.preciosInvalidos} precio(s) inválido(s); se guardarán vacíos`,
     );
+  if (resumen.productosSinRubro)
+    advertencias.push(
+      `${resumen.productosSinRubro} producto(s) no quedaron asociados a un rubro del Excel`,
+    );
 
   const cajaAdvertencias = $("adminImportarPreviewAdvertencias");
   if (cajaAdvertencias) {
@@ -1900,8 +1904,18 @@ function cerrarVistaPreviaImportacion() {
   modal?.setAttribute("aria-hidden", "true");
 }
 
+function normalizarRubroImportacion(valor) {
+  return String(valor ?? "")
+    .replace(/\u00a0/g, " ")
+    .trim()
+    .replace(/\s+/g, " ")
+    .slice(0, 80);
+}
+
 function extraerProductosImportacion(filas, columnas) {
   const mapa = new Map();
+  const rubrosDetectados = new Set();
+  let rubroActual = "";
   const estadisticas = {
     filasVacias: 0,
     sinCodigo: 0,
@@ -1910,6 +1924,8 @@ function extraerProductosImportacion(filas, columnas) {
     preciosInvalidos: 0,
     duplicadosArchivo: 0,
     filasIgnoradas: 0,
+    productosSinRubro: 0,
+    rubrosDetectados: 0,
   };
 
   for (let i = columnas.fila + 1; i < filas.length; i++) {
@@ -1923,9 +1939,8 @@ function extraerProductosImportacion(filas, columnas) {
       continue;
     }
 
-    const codigo = limpiarCodigoImportacion(
-      leerCampoImportacion(fila, columnas.rangos.codigo),
-    );
+    const codigoOriginal = leerCampoImportacion(fila, columnas.rangos.codigo);
+    const codigo = limpiarCodigoImportacion(codigoOriginal);
     const articulo = String(
       leerCampoImportacion(fila, columnas.rangos.articulo) ?? "",
     ).trim();
@@ -1935,6 +1950,23 @@ function extraerProductosImportacion(filas, columnas) {
     const precio = columnas.rangos.precio
       ? parsearPrecioImportacion(precioOriginal)
       : null;
+
+    // En el Inventario Valuado los rubros aparecen como una fila independiente
+    // en la columna Código (por ejemplo ADEREZOS, BEBIDAS, LACTEOS), sin
+    // artículo ni precio. Desde esa fila, los productos siguientes heredan ese
+    // rubro hasta encontrar el próximo encabezado de rubro.
+    const posibleRubro = normalizarRubroImportacion(codigoOriginal);
+    const filaEsRubro = Boolean(
+      posibleRubro &&
+      !/^\d+$/.test(limpiarCodigoImportacion(posibleRubro)) &&
+      !articulo &&
+      String(precioOriginal ?? "").trim() === "",
+    );
+    if (filaEsRubro) {
+      rubroActual = posibleRubro;
+      rubrosDetectados.add(rubroActual);
+      continue;
+    }
 
     if (!codigo) {
       estadisticas.sinCodigo++;
@@ -1960,10 +1992,14 @@ function extraerProductosImportacion(filas, columnas) {
     const clave = claveCodigoImportacion(codigo);
     if (mapa.has(clave)) estadisticas.duplicadosArchivo++;
 
+    if (!rubroActual) estadisticas.productosSinRubro++;
+
     // Los códigos numéricos con y sin ceros iniciales representan el mismo
-    // producto (por ejemplo 00663 y 663). Se conserva la última aparición.
-    mapa.set(clave, { codigo, articulo, precio });
+    // producto (por ejemplo 00663 y 663). Se conserva la última aparición,
+    // incluyendo el rubro detectado para esa fila.
+    mapa.set(clave, { codigo, articulo, precio, rubro: rubroActual });
   }
+  estadisticas.rubrosDetectados = rubrosDetectados.size;
   return { productos: [...mapa.values()], ...estadisticas };
 }
 
@@ -2004,6 +2040,8 @@ async function importarArchivoCatalogo(archivo) {
         preciosInvalidos: 0,
         duplicadosArchivo: 0,
         filasIgnoradas: 0,
+        productosSinRubro: 0,
+        rubrosDetectados: 0,
       };
   const cantidadSuficiente =
     extraidos.productos.length >= IMPORTACION_MIN_PRODUCTOS;
@@ -2017,6 +2055,12 @@ async function importarArchivoCatalogo(archivo) {
     { ok: tieneCodigo, texto: "Columna Código encontrada" },
     { ok: tieneArticulo, texto: "Columna Artículo encontrada" },
     { ok: tienePrecio, texto: "Columna Precio encontrada" },
+    {
+      ok: extraidos.rubrosDetectados > 0,
+      texto: extraidos.rubrosDetectados > 0
+        ? `${extraidos.rubrosDetectados} rubros detectados y listos para asignar`
+        : "No se detectaron rubros en el archivo",
+    },
     {
       ok: cantidadSuficiente,
       texto: cantidadSuficiente

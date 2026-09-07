@@ -1,5 +1,9 @@
 const { query } = require("./db");
 
+function ejecutarConsultaCatalogo(cliente, texto, parametros = []) {
+  return cliente ? cliente.query(texto, parametros) : query(texto, parametros);
+}
+
 let esquemaAsegurado = false;
 let promesaEsquema = null;
 
@@ -372,6 +376,87 @@ async function eliminarRubroCatalogoAdminDb(id) {
   const r = await query(`DELETE FROM catalog_categories WHERE category_id=$1`, [rubroId]);
   if (!r.rowCount) throw new Error("El rubro no existe");
   return true;
+}
+
+async function sincronizarRubrosImportadosCatalogoDb(productos = [], cliente = null) {
+  // El esquema se asegura antes de abrir la transacción principal. Cuando se
+  // recibe un cliente, todas las mutaciones posteriores usan la misma sesión.
+  if (!cliente) await asegurarEsquemaCatalogoPublico();
+
+  const normalizados = (productos || [])
+    .map((producto) => ({
+      codigo: textoLimitado(producto?.codigo, 160),
+      rubro: textoLimitado(producto?.rubro, 80),
+    }))
+    .filter((producto) => producto.codigo);
+
+  const preparados = normalizados
+    .filter((producto) => producto.rubro)
+    .map((producto) => ({ ...producto, slug: slugCatalogo(producto.rubro) }))
+    .filter((producto) => producto.slug);
+
+  const rubrosUnicos = [];
+  const slugsVistos = new Set();
+  for (const producto of preparados) {
+    if (slugsVistos.has(producto.slug)) continue;
+    slugsVistos.add(producto.slug);
+    rubrosUnicos.push({ nombre: producto.rubro, slug: producto.slug });
+  }
+
+  for (const rubro of rubrosUnicos) {
+    await ejecutarConsultaCatalogo(cliente, `
+      INSERT INTO catalog_categories(name, slug, active, sort_order, updated_at)
+      VALUES($1,$2,TRUE,(SELECT COALESCE(MAX(sort_order),-1)+1 FROM catalog_categories),NOW())
+      ON CONFLICT(slug) DO UPDATE SET active=TRUE, updated_at=NOW()
+    `, [rubro.nombre, rubro.slug]);
+  }
+
+  // Primero se reflejan explícitamente los productos que el Excel deja sin
+  // rubro. Esto evita conservar una asignación antigua por accidente.
+  const codigosSinRubro = normalizados
+    .filter((producto) => !producto.rubro)
+    .map((producto) => producto.codigo);
+  if (codigosSinRubro.length) {
+    await ejecutarConsultaCatalogo(cliente, `
+      UPDATE catalog_product_settings
+      SET category_id=NULL, updated_at=NOW()
+      WHERE code = ANY($1::text[])
+    `, [codigosSinRubro]);
+  }
+
+  const asignaciones = preparados.map((producto) => ({
+    code: producto.codigo,
+    slug: producto.slug,
+  }));
+
+  if (asignaciones.length) {
+    // Se actualiza únicamente category_id; visible, destacado, imágenes,
+    // unidad de venta y el resto de la configuración comercial se preservan.
+    await ejecutarConsultaCatalogo(cliente, `
+      INSERT INTO catalog_product_settings(code, category_id, updated_at)
+      SELECT x.code, c.category_id, NOW()
+      FROM jsonb_to_recordset($1::jsonb) AS x(code TEXT, slug TEXT)
+      JOIN catalog_categories c ON c.slug=x.slug
+      JOIN product_catalog p ON p.code=x.code
+      ON CONFLICT(code) DO UPDATE
+        SET category_id=EXCLUDED.category_id, updated_at=NOW()
+    `, [JSON.stringify(asignaciones)]);
+  }
+
+  // El Excel reemplaza por completo product_catalog. Las configuraciones de
+  // códigos que ya no existen se eliminan para evitar registros huérfanos.
+  const huerfanos = await ejecutarConsultaCatalogo(cliente, `
+    DELETE FROM catalog_product_settings s
+    WHERE NOT EXISTS (SELECT 1 FROM product_catalog p WHERE p.code=s.code)
+    RETURNING s.code
+  `);
+
+  return {
+    rubros: rubrosUnicos.length,
+    productosAsignados: asignaciones.length,
+    productosSinRubro: codigosSinRubro.length,
+    configuracionesHuerfanasEliminadas: huerfanos.rowCount || 0,
+  };
 }
 
 async function listarProductosCatalogoAdminDb(opciones = {}) {
@@ -748,4 +833,5 @@ module.exports = {
   guardarImagenManualCatalogoDb,
   quitarImagenCatalogoDb,
   listarPendientesImagenCatalogoDb,
+  sincronizarRubrosImportadosCatalogoDb,
 };
