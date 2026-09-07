@@ -1,0 +1,21 @@
+const fs = require('fs');
+const assert = require('assert');
+const selSrc = fs.readFileSync('catalogo-imagenes-seleccion.js','utf8');
+const img = fs.readFileSync('catalogo-imagenes.js','utf8');
+const estado = fs.readFileSync('catalogo-imagenes-estado.js','utf8');
+const { puntuarCandidato, decidirSeleccion, medidas } = require('../catalogo-imagenes-seleccion');
+
+assert(selSrc.includes('puntuarCandidato'), 'falta puntuación centralizada');
+assert(selSrc.includes('coincidenciaTexto') && selSrc.includes('coincidenciaPresentacion'), 'falta coincidencia de nombre/presentación');
+assert(selSrc.includes("confianza = total >= 84 ? 'alta' : total >= 68 ? 'media' : 'baja'"), 'faltan niveles de confianza');
+assert(selSrc.includes("accion: 'confirmar'"), 'falta decisión automática');
+assert(img.includes('evaluarCandidatosProducto'), 'no se evalúan varios candidatos');
+assert(img.includes('decidirSeleccion(evaluados)'), 'la búsqueda no usa selector central');
+assert(estado.includes('ESTADOS_IMAGEN.CONFIRMADA'), 'falta transición automática a confirmada');
+assert.deepStrictEqual(medidas('Coca Cola 2,25 L'), ['2.25l']);
+const producto = { codigo: '7791234567890', nombre: 'Coca Cola Original 2,25 L', marca: 'Coca Cola', presentacion: '2,25 L' };
+const candidato = { titulo: 'Coca Cola Original 2.25 L botella', marca: 'Coca Cola', presentacion: '2.25 L', exactaEAN: true, puntajePreliminar: 86, proveedor: 'open_food_facts', url: 'https://ejemplo.com/7791234567890.jpg' };
+const evaluacion = puntuarCandidato(producto, candidato, { score: 88, fondoBlanco: true });
+assert(evaluacion.total >= 84 && evaluacion.confianza === 'alta', 'una coincidencia EAN fuerte debería tener confianza alta');
+assert.strictEqual(decidirSeleccion([{ candidato, valido: {}, evaluacion }]).accion, 'confirmar');
+console.log('OK P2 selección automática: ranking, confianza y decisión centralizados');

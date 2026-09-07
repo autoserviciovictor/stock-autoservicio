@@ -3,15 +3,13 @@ const {
   obtenerProductoCatalogoAdminDb,
   guardarResultadoImagenCatalogoDb,
   obtenerImagenCatalogoDb,
-  listarPendientesImagenCatalogoDb,
 } = require("./db-catalogo-publico");
 const { ESTADOS_IMAGEN } = require("./catalogo-imagenes-estado");
 const { buscarCandidatosMultiples, urlHttps } = require("./catalogo-imagenes-busqueda");
+const { puntuarCandidato, decidirSeleccion } = require("./catalogo-imagenes-seleccion");
 
 const IMAGEN_TIMEOUT_MS = 8000;
 const MAX_IMAGEN_BYTES = 8 * 1024 * 1024;
-const MAX_LOTE = 60;
-const CONCURRENCIA = 3;
 const LADO_CATALOGO = 600;
 const FONDO_BLANCO_MINIMO = 0.88;
 
@@ -113,18 +111,34 @@ async function analizarCalidadImagen(buffer) {
     const altoRel = caja.alto / info.height;
     const tocaBorde = caja.minX <= 1 || caja.minY <= 1 || caja.maxX >= info.width - 2 || caja.maxY >= info.height - 2;
 
-    if (blancoBorde < FONDO_BLANCO_MINIMO) {
-      return { acepta: false, motivo: "el fondo no es suficientemente blanco", width, height, blancoBorde, score: Math.round(blancoBorde * 100) };
+    if (tocaBorde || anchoRel > 0.985 || altoRel > 0.985) {
+      return { acepta: false, motivo: "el producto está recortado o toca los bordes", width, height, blancoBorde, score: 45 };
     }
-    if (tocaBorde || anchoRel > 0.96 || altoRel > 0.96) {
-      return { acepta: false, motivo: "el producto está recortado o toca los bordes", width, height, blancoBorde, score: 55 };
-    }
-    if (anchoRel < 0.16 || altoRel < 0.34 || caja.ocupacion < 0.035) {
-      return { acepta: false, motivo: "el producto aparece demasiado pequeño", width, height, blancoBorde, score: 55 };
+    if (anchoRel < 0.10 || altoRel < 0.20 || caja.ocupacion < 0.018) {
+      return { acepta: false, motivo: "el producto aparece demasiado pequeño", width, height, blancoBorde, score: 42 };
     }
 
-    const score = Math.min(99, Math.max(70, Math.round(blancoBorde * 80 + Math.min(0.19, caja.ocupacion) * 100)));
-    return { acepta: true, motivo: "fondo blanco y escala apta", width, height, blancoBorde, score, caja };
+    // P2: el fondo blanco suma calidad pero ya no es un requisito absoluto.
+    // Esto permite cubrir muchos más productos; la selección automática sigue
+    // priorizando packshots limpios y la normalización deja un lienzo 600x600.
+    const fondoBlanco = blancoBorde >= FONDO_BLANCO_MINIMO;
+    const resolucion = Math.min(100, Math.round((Math.min(width, height) / 1000) * 100));
+    const encuadre = Math.min(100, Math.round((Math.min(anchoRel, 0.82) / 0.82) * 55 + (Math.min(altoRel, 0.88) / 0.88) * 45));
+    const score = Math.max(45, Math.min(99, Math.round(
+      (fondoBlanco ? 28 : Math.max(4, blancoBorde * 18))
+      + resolucion * 0.28
+      + encuadre * 0.44
+    )));
+    return {
+      acepta: true,
+      motivo: fondoBlanco ? "packshot limpio y escala apta" : "imagen de referencia utilizable; fondo no ideal",
+      width,
+      height,
+      blancoBorde,
+      fondoBlanco,
+      score,
+      caja,
+    };
   } catch (error) {
     return { acepta: false, motivo: `imagen no procesable: ${error?.message || "formato inválido"}`, score: 0 };
   }
@@ -167,19 +181,24 @@ async function validarCandidato(candidato) {
   return null;
 }
 
-async function prepararPreviewCandidatos(candidatos = [], limite = 6) {
+async function evaluarCandidatosProducto(producto, candidatos = [], limite = 10) {
+  const evaluados = [];
   for (const candidato of candidatos.slice(0, Math.max(1, limite))) {
     const valido = await validarCandidato({
       ...candidato,
       puntaje: candidato.puntajePreliminar,
       exacta: candidato.exactaEAN,
     });
-    if (valido) return valido;
+    if (!valido) continue;
+    const evaluacion = puntuarCandidato(producto, candidato, valido.calidad);
+    evaluados.push({ candidato, valido, evaluacion });
+    // Un EAN exacto con score alto ya es suficiente; evita descargas innecesarias.
+    if (evaluacion.exactoEAN && evaluacion.total >= 88) break;
   }
-  return null;
+  return evaluados;
 }
 
-async function buscarImagenProducto(codigo, { guardar = true } = {}) {
+async function buscarImagenProducto(codigo, { guardar = true, confirmarAutomaticamente = true } = {}) {
   const producto = await obtenerProductoCatalogoAdminDb(codigo);
   if (!producto) throw new Error("Producto no encontrado");
 
@@ -212,30 +231,90 @@ async function buscarImagenProducto(codigo, { guardar = true } = {}) {
   });
 
   try {
-    // P1B: las fuentes solo descubren candidatos. Ninguna fuente confirma o
-    // escribe una imagen final. Guardamos la lista completa para la P2.
     const busqueda = await buscarCandidatosMultiples(producto);
-    if (busqueda.candidatos.length) {
-      // Conservamos una vista previa compatible con el editor actual, pero no
-      // representa una selección definitiva. La P2 puntuará y elegirá sola.
-      const preview = await prepararPreviewCandidatos(busqueda.candidatos);
-      const representativo = preview || busqueda.candidatos[0];
+    if (!busqueda.candidatos.length) {
+      const mensaje = busqueda.braveConfigurado
+        ? "No se encontraron candidatos de imagen para este producto."
+        : "No se encontraron candidatos por EAN. La búsqueda ampliada requiere BRAVE_SEARCH_API_KEY.";
       await guardarResultadoImagenCatalogoDb(producto.codigo, {
-        estado: ESTADOS_IMAGEN.CANDIDATO,
-        candidatoUrl: representativo.url,
-        candidatoFuente: representativo.fuente,
-        candidatoTitulo: representativo.titulo,
-        candidatoPuntaje: preview ? preview.puntaje : representativo.puntajePreliminar,
-        candidatoData: preview?.normalizada || null,
-        candidatoMime: preview?.mime || "",
-        candidatos: busqueda.candidatos,
-        error: preview ? "" : `${busqueda.candidatos.length} candidatos encontrados; la selección automática se realizará en la P2.`,
+        estado: ESTADOS_IMAGEN.SIN_RESULTADO,
+        candidatoUrl: "",
+        candidatoFuente: "",
+        candidatoTitulo: "",
+        candidatoPuntaje: 0,
+        candidatoData: null,
+        candidatoMime: "",
+        candidatos: [],
+        error: mensaje,
       });
       return {
-        encontrado: true,
+        encontrado: false,
         confirmado: false,
-        candidato: representativo,
+        candidato: null,
+        candidatos: [],
+        cantidadCandidatos: 0,
+        mensaje,
+        requiereConfiguracion: busqueda.requiereConfiguracion,
+        producto: await obtenerProductoCatalogoAdminDb(producto.codigo),
+      };
+    }
+
+    // P2: descargamos y evaluamos varios candidatos. La decisión final se toma
+    // en un único módulo, no en cada proveedor.
+    const evaluados = await evaluarCandidatosProducto(producto, busqueda.candidatos, 10);
+    const decision = decidirSeleccion(evaluados);
+
+    if (!decision.mejor) {
+      const mensaje = "Se encontraron resultados, pero ninguna imagen pudo descargarse o superó la calidad mínima.";
+      await guardarResultadoImagenCatalogoDb(producto.codigo, {
+        estado: ESTADOS_IMAGEN.SIN_RESULTADO,
         candidatos: busqueda.candidatos,
+        candidatoUrl: "",
+        candidatoFuente: "",
+        candidatoTitulo: "",
+        candidatoPuntaje: 0,
+        candidatoData: null,
+        candidatoMime: "",
+        error: mensaje,
+      });
+      return {
+        encontrado: false,
+        confirmado: false,
+        cantidadCandidatos: busqueda.candidatos.length,
+        mensaje,
+        producto: await obtenerProductoCatalogoAdminDb(producto.codigo),
+      };
+    }
+
+    const { candidato, valido, evaluacion } = decision.mejor;
+    const fuente = `${candidato.fuente || candidato.proveedor || "Automática"} · confianza ${evaluacion.confianza}`;
+
+    if (confirmarAutomaticamente && decision.accion === "confirmar") {
+      // P3: persistencia definitiva. La imagen normalizada se guarda una sola
+      // vez como BYTEA y desde este momento el producto queda protegido.
+      await guardarResultadoImagenCatalogoDb(producto.codigo, {
+        imagen: candidato.url,
+        fuente,
+        estado: ESTADOS_IMAGEN.CONFIRMADA,
+        imagenData: valido.normalizada,
+        imagenMime: valido.mime || "image/jpeg",
+        candidatoUrl: "",
+        candidatoFuente: "",
+        candidatoTitulo: "",
+        candidatoPuntaje: 0,
+        candidatoData: null,
+        candidatoMime: "",
+        candidatos: [],
+        error: "",
+      });
+
+      return {
+        encontrado: true,
+        confirmado: true,
+        automatico: true,
+        confianza: evaluacion.confianza,
+        puntaje: evaluacion.total,
+        candidato,
         cantidadCandidatos: busqueda.candidatos.length,
         fuentes: busqueda.fuentes,
         consultas: busqueda.consultas,
@@ -243,34 +322,34 @@ async function buscarImagenProducto(codigo, { guardar = true } = {}) {
       };
     }
 
-    const mensaje = busqueda.braveConfigurado
-      ? "No se encontraron candidatos de imagen para este producto."
-      : "No se encontraron candidatos por EAN. La búsqueda ampliada requiere BRAVE_SEARCH_API_KEY.";
+    // Solo los casos de baja confianza quedan como candidata para revisión.
     await guardarResultadoImagenCatalogoDb(producto.codigo, {
-      estado: ESTADOS_IMAGEN.SIN_RESULTADO,
-      candidatoUrl: "",
-      candidatoFuente: "",
-      candidatoTitulo: "",
-      candidatoPuntaje: 0,
-      candidatoData: null,
-      candidatoMime: "",
-      candidatos: [],
-      error: mensaje,
+      estado: ESTADOS_IMAGEN.CANDIDATO,
+      candidatoUrl: candidato.url,
+      candidatoFuente: fuente,
+      candidatoTitulo: candidato.titulo,
+      candidatoPuntaje: evaluacion.total,
+      candidatoData: valido.normalizada,
+      candidatoMime: valido.mime || "image/jpeg",
+      candidatos: busqueda.candidatos,
+      error: `Confianza ${evaluacion.confianza}. Se dejó como candidata para revisión manual.`,
     });
     return {
-      encontrado: false,
+      encontrado: true,
       confirmado: false,
-      candidato: null,
-      candidatos: [],
-      cantidadCandidatos: 0,
-      mensaje,
-      requiereConfiguracion: busqueda.requiereConfiguracion,
+      automatico: false,
+      confianza: evaluacion.confianza,
+      puntaje: evaluacion.total,
+      candidato,
+      candidatos: busqueda.candidatos,
+      cantidadCandidatos: busqueda.candidatos.length,
+      fuentes: busqueda.fuentes,
+      consultas: busqueda.consultas,
       producto: await obtenerProductoCatalogoAdminDb(producto.codigo),
     };
   } catch (error) {
     await guardarResultadoImagenCatalogoDb(producto.codigo, {
       estado: ESTADOS_IMAGEN.ERROR,
-      candidatos: [],
       error: error?.message || "Error inesperado durante la búsqueda de imagen",
     });
     throw error;
@@ -328,39 +407,9 @@ async function importarImagenManual(codigo, url) {
   return obtenerProductoCatalogoAdminDb(producto.codigo);
 }
 
-async function mapConcurrencia(items, concurrencia, fn) {
-  const salida = new Array(items.length);
-  let cursor = 0;
-  async function worker() {
-    while (true) {
-      const i = cursor++;
-      if (i >= items.length) return;
-      try { salida[i] = await fn(items[i], i); }
-      catch (error) { salida[i] = { error: error?.message || String(error) }; }
-    }
-  }
-  await Promise.all(Array.from({ length: Math.min(concurrencia, items.length) }, worker));
-  return salida;
-}
-
-async function buscarImagenesLote({ limite = 20 } = {}) {
-  const cantidad = Math.max(1, Math.min(MAX_LOTE, Number(limite) || 20));
-  const pendientes = await listarPendientesImagenCatalogoDb(cantidad);
-  const resultados = await mapConcurrencia(pendientes, CONCURRENCIA, (p) => buscarImagenProducto(p.codigo));
-  const resumen = { procesados: pendientes.length, confirmadas: 0, candidatas: 0, sinResultado: 0, errores: 0, omitidas: 0 };
-  for (const r of resultados) {
-    if (r?.error) resumen.errores += 1;
-    else if (r?.omitido) resumen.omitidas += 1;
-    else if (r?.confirmado) resumen.confirmadas += 1;
-    else if (r?.encontrado) resumen.candidatas += 1;
-    else resumen.sinResultado += 1;
-  }
-  return resumen;
-}
 
 module.exports = {
   buscarImagenProducto,
-  buscarImagenesLote,
   obtenerImagenNormalizadaProducto,
   importarImagenManual,
   analizarCalidadImagen,

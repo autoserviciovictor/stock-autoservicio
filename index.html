@@ -3228,7 +3228,7 @@
                 <option value="sin-configurar">Sin configurar</option>
                 <option value="destacado">Destacados</option>
               </select>
-              <select id="catalogFiltroImagen" class="oculto" aria-hidden="true" tabindex="-1" aria-label="Filtrar por imagen">
+              <select id="catalogFiltroImagen" aria-label="Filtrar por imagen">
                 <option value="todos">Todas las imágenes</option>
                 <option value="confirmada">Imagen confirmada</option>
                 <option value="candidato">Candidatas</option>
@@ -3237,12 +3237,22 @@
                 <option value="error">Con error</option>
                 <option value="sin_imagen">Sin imagen</option>
               </select>
-              <button id="catalogBtnBuscarImagenes" class="catalog-btn catalog-btn-secondary catalog-image-batch-btn oculto" type="button" aria-hidden="true" tabindex="-1" title="Búsqueda de imágenes temporalmente postergada">
-                <svg class="app-icon"><use href="#icon-search"></use></svg><span>Buscar 20 imágenes</span>
+              <button id="catalogBtnBuscarImagenes" class="catalog-btn catalog-btn-secondary catalog-image-batch-btn" type="button" title="Completar automáticamente las imágenes faltantes">
+                <svg class="app-icon"><use href="#icon-search"></use></svg><span>Completar imágenes automáticamente</span>
               </button>
               <button id="catalogBtnRecargar" class="catalog-icon-btn" type="button" aria-label="Actualizar productos" title="Actualizar">
                 <svg class="app-icon"><use href="#icon-refresh"></use></svg>
               </button>
+            </div>
+
+            <div id="catalogImagenesProceso" class="catalog-image-process oculto" aria-live="polite">
+              <div class="catalog-image-process-copy">
+                <strong id="catalogImagenesProcesoTitulo">Imágenes automáticas</strong>
+                <span id="catalogImagenesProcesoTexto">Listo para completar las imágenes faltantes.</span>
+              </div>
+              <div class="catalog-image-process-progress"><span id="catalogImagenesProcesoBarra"></span></div>
+              <div class="catalog-image-process-stats" id="catalogImagenesProcesoStats"></div>
+              <button id="catalogBtnPausarImagenes" class="catalog-btn catalog-btn-secondary oculto" type="button">Pausar</button>
             </div>
 
             <div class="catalog-table-card">
@@ -3290,11 +3300,11 @@
             </div>
             <div class="catalog-image-stage-note" role="note" aria-label="Estado de imágenes del catálogo">
               <span><svg class="app-icon"><use href="#icon-box"></use></svg></span>
-              <div><strong>Imágenes de productos</strong><p>La búsqueda y carga de imágenes queda preparada para retomarla más adelante. No afecta la edición, los rubros ni la publicación de productos.</p></div>
-              <em>Pendiente</em>
+              <div><strong>Imágenes automáticas activas</strong><p>El sistema busca, selecciona, descarga y guarda una copia propia. Las imágenes confirmadas no se sobrescriben automáticamente.</p></div>
+              <em>Activo</em>
             </div>
-            <section class="catalog-image-manager oculto" aria-hidden="true" aria-label="Imagen del producto">
-              <div class="catalog-image-manager-head"><div><strong>Imagen del producto</strong><p>Se prioriza el EAN para identificar el producto. Toda imagen automática debe revisarse: fondo blanco, solo el producto, completo, centrado y nítido.</p></div><em id="catalogProductoEstadoImagen">Sin imagen</em></div>
+            <section class="catalog-image-manager" aria-label="Imagen del producto">
+              <div class="catalog-image-manager-head"><div><strong>Imagen del producto</strong><p>Se prioriza el EAN y la coincidencia de nombre, marca y presentación. Las imágenes confiables se descargan, normalizan y quedan asignadas automáticamente.</p></div><em id="catalogProductoEstadoImagen">Sin imagen</em></div>
               <div class="catalog-image-manager-grid">
                 <div class="catalog-image-preview" id="catalogProductoImagenPreview"><span><svg class="app-icon"><use href="#icon-box"></use></svg></span><small>Sin imagen</small></div>
                 <div class="catalog-image-controls">
@@ -3306,7 +3316,7 @@
                     <button id="catalogProductoQuitarImagen" class="catalog-btn catalog-btn-danger oculto" type="button">Quitar imagen</button>
                   </div>
                   <p id="catalogProductoImagenEstadoBusqueda" class="catalog-image-search-status" role="status" aria-live="polite"></p>
-                  <p id="catalogProductoImagenMeta" class="catalog-image-meta"></p><p class="catalog-image-standard">Formato del catálogo: cuadrado 1:1, fondo blanco y escala uniforme. Las imágenes con manos, fondos reales, recortes o producto demasiado pequeño deben rechazarse.</p>
+                  <p id="catalogProductoImagenMeta" class="catalog-image-meta"></p><p class="catalog-image-standard">Formato del catálogo: cuadrado 1:1 y escala uniforme. Las imágenes automáticas quedan guardadas en el sistema y no dependen del sitio original.</p>
                 </div>
               </div>
             </section>

@@ -7,7 +7,7 @@ const css=fs.readFileSync("catalogo-admin.css","utf8");
 assert(busqueda.includes("producto packshot fondo blanco envase"));
 assert(img.includes("ESTADOS_IMAGEN.CANDIDATO"));
 assert(!img.includes('estado: "confirmada",\n      candidatoUrl'));
-assert(html.includes("fondo blanco, solo el producto"));
+assert(html.includes("Se prioriza el EAN y la coincidencia de nombre, marca y presentación."));
 assert(html.includes("Formato del catálogo: cuadrado 1:1"));
 assert(css.includes("aspect-ratio:1/1"));
 assert(css.includes("object-fit:contain"));

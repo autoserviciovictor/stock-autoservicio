@@ -14,13 +14,12 @@ assert(!admin.includes('$("catalogRubroOrden")'), "catalogo-admin todavía depen
 assert(db.includes("ORDER BY c.name, c.category_id"), "los rubros no usan orden automático alfabético");
 assert(db.includes("ORDER BY s.featured DESC, c.name, p.article, p.code"), "el catálogo público no usa orden automático por rubro/producto");
 assert(db.includes("ORDER BY COALESCE(s.visible,FALSE) DESC, COALESCE(c.name,'zzzzzzzz'), p.article, p.code"), "el listado admin no usa orden automático");
-assert(html.includes('id="catalogFiltroImagen" class="oculto"'), "el filtro de imágenes debería quedar oculto mientras la etapa está postergada");
-assert(html.includes('id="catalogBtnBuscarImagenes" class="catalog-btn catalog-btn-secondary catalog-image-batch-btn oculto"'), "el lote de imágenes debería quedar oculto mientras la etapa está postergada");
-assert(html.includes("Imágenes de productos"), "falta aviso de imágenes postergadas");
-assert(html.includes("queda preparada para retomarla más adelante"), "falta aclarar que las imágenes quedan preparadas para después");
+assert(!html.includes('id="catalogFiltroImagen" class="oculto"'), "el filtro de imágenes no debe quedar oculto");
+assert(!html.includes('id="catalogBtnBuscarImagenes" class="catalog-btn catalog-btn-secondary catalog-image-batch-btn oculto"'), "el proceso automático no debe quedar oculto");
+assert(html.includes("Completar imágenes automáticamente"), "falta acción de imágenes automáticas");
 assert(!imagenes.includes("GOOGLE_CSE_API_KEY") && !imagenes.includes("GOOGLE_CSE_CX"), "quedaron dependencias antiguas de Google CSE");
 const activar = admin.slice(admin.indexOf("async function activar()"));
 const cargasIniciales = (activar.match(/await cargarProductos\(\{ conservarPagina: false \}\);/g) || []).length;
 assert.strictEqual(cargasIniciales, 1, "activar() carga productos más de una vez");
 
-console.log("OK catalogo-etapa3-cierre: orden automático, imágenes postergadas y carga admin limpia");
+console.log("OK catalogo-etapa3-cierre: orden automático e imágenes automáticas activas");

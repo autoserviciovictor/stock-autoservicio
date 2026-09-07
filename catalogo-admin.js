@@ -13,6 +13,7 @@ const estado = {
   busquedaTimer: null,
   cargando: false,
   imagenPreviewObjectUrl: "",
+  procesoImagenesTimer: null,
 };
 
 const esc = (v = "") => String(v).replace(/[&<>'"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[c]));
@@ -227,7 +228,7 @@ function renderImagenProducto(p = {}) {
       estado.imagenPreviewObjectUrl = URL.createObjectURL(blob);
       preview.innerHTML = `<img src="${estado.imagenPreviewObjectUrl}" alt="Vista previa normalizada de ${esc(p.nombre || "producto")}" />`;
       if (status && candidata) {
-        status.textContent = "Imagen descargada y normalizada a 600×600 con fondo blanco. Revisala antes de confirmar.";
+        status.textContent = "Imagen descargada y normalizada a 600×600. Este caso quedó para revisión porque la confianza automática fue baja.";
         status.className = "catalog-image-search-status ok";
       }
     })
@@ -262,7 +263,7 @@ async function buscarImagenProductoActual() {
   const status = $("catalogProductoImagenEstadoBusqueda");
   boton.disabled = true;
   if (status) {
-    status.textContent = "Buscando una imagen con fondo blanco, producto completo y buena resolución…";
+    status.textContent = "Buscando y seleccionando automáticamente la mejor imagen de referencia…";
     status.className = "catalog-image-search-status buscando";
   }
   try {
@@ -314,21 +315,76 @@ async function quitarImagenActual() {
   } catch (e) { mensaje(e.message); }
 }
 
-async function buscarImagenesLote() {
+function renderProcesoImagenes(proceso = {}) {
+  const panel = $("catalogImagenesProceso");
+  const titulo = $("catalogImagenesProcesoTitulo");
+  const texto = $("catalogImagenesProcesoTexto");
+  const barra = $("catalogImagenesProcesoBarra");
+  const stats = $("catalogImagenesProcesoStats");
+  const iniciar = $("catalogBtnBuscarImagenes");
+  const pausar = $("catalogBtnPausarImagenes");
+  if (!panel) return;
+
+  const estadoProceso = proceso.estado || "idle";
+  const total = Number(proceso.totalObjetivo) || 0;
+  const procesados = Number(proceso.procesados) || 0;
+  const pct = total ? Math.min(100, Math.round((procesados / total) * 100)) : (estadoProceso === "finished" ? 100 : 0);
+  panel.classList.toggle("oculto", estadoProceso === "idle" && !total);
+  if (barra) barra.style.width = `${pct}%`;
+  if (titulo) titulo.textContent = estadoProceso === "running" ? "Completando imágenes automáticamente" : estadoProceso === "paused" ? "Proceso de imágenes pausado" : estadoProceso === "finished" ? "Proceso de imágenes finalizado" : "Imágenes automáticas";
+  if (texto) texto.textContent = estadoProceso === "running" ? `${numero(procesados)} de ${numero(total)} productos procesados (${pct}%).` : (proceso.mensaje || "Listo para completar las imágenes faltantes.");
+  if (stats) stats.textContent = `Asignadas ${numero(proceso.confirmadas)} · Revisar ${numero(proceso.revisar)} · Sin resultado ${numero(proceso.sinResultado)} · Errores ${numero(proceso.errores)} · Omitidas ${numero(proceso.omitidas)}`;
+  if (pausar) pausar.classList.toggle("oculto", estadoProceso !== "running");
+  if (iniciar) {
+    const span = iniciar.querySelector("span");
+    iniciar.disabled = estadoProceso === "running";
+    if (span) span.textContent = estadoProceso === "paused" ? "Reanudar imágenes" : estadoProceso === "finished" ? "Completar imágenes faltantes" : "Completar imágenes automáticamente";
+  }
+}
+
+async function cargarProcesoImagenes({ refrescarCatalogo = false } = {}) {
+  try {
+    const data = await api("/admin/catalogo/imagenes/proceso");
+    renderProcesoImagenes(data.proceso || {});
+    const estadoProceso = data.proceso?.estado;
+    if (refrescarCatalogo || estadoProceso === "finished") await Promise.all([cargarEstado(), cargarProductos()]);
+    clearTimeout(estado.procesoImagenesTimer);
+    if (estado.activo && estadoProceso === "running") {
+      estado.procesoImagenesTimer = setTimeout(() => cargarProcesoImagenes({ refrescarCatalogo: true }), 4000);
+    }
+    return data.proceso || {};
+  } catch (e) {
+    console.warn("No se pudo consultar el proceso de imágenes:", e);
+    return null;
+  }
+}
+
+async function iniciarProcesoImagenesMasivo() {
   const boton = $("catalogBtnBuscarImagenes");
   if (!boton || boton.disabled) return;
   boton.disabled = true;
-  const texto = boton.querySelector("span");
-  const anterior = texto?.textContent || "Buscar 20 imágenes";
-  if (texto) texto.textContent = "Buscando…";
-  mensaje("Buscando imágenes para 20 productos sin imagen…");
   try {
-    const data = await api("/admin/catalogo/imagenes/buscar-lote", { method: "POST", body: JSON.stringify({ limite: 20 }) });
-    const r = data.resumen || {};
-    await Promise.all([cargarEstado(), cargarProductos()]);
-    mensaje(`Procesados ${numero(r.procesados)} · confirmadas ${numero(r.confirmadas)} · candidatas ${numero(r.candidatas)} · sin resultado ${numero(r.sinResultado)} · errores ${numero(r.errores)}`, "ok");
+    const actual = await cargarProcesoImagenes();
+    const reanudar = actual?.estado === "paused";
+    const data = await api("/admin/catalogo/imagenes/proceso/iniciar", { method: "POST", body: JSON.stringify({ reanudar }) });
+    renderProcesoImagenes(data.proceso || {});
+    mensaje(reanudar ? "Proceso de imágenes reanudado." : "Proceso automático de imágenes iniciado. Podés salir de esta pantalla y continuará en el servidor.", "ok");
+    clearTimeout(estado.procesoImagenesTimer);
+    estado.procesoImagenesTimer = setTimeout(() => cargarProcesoImagenes({ refrescarCatalogo: true }), 2000);
+  } catch (e) {
+    mensaje(e.message);
+  } finally {
+    boton.disabled = false;
+  }
+}
+
+async function pausarImagenes() {
+  try {
+    const data = await api("/admin/catalogo/imagenes/proceso/pausar", { method: "POST" });
+    renderProcesoImagenes(data.proceso || {});
+    clearTimeout(estado.procesoImagenesTimer);
+    mensaje("Proceso de imágenes pausado.", "ok");
   } catch (e) { mensaje(e.message); }
-  finally { boton.disabled = false; if (texto) texto.textContent = anterior; }
 }
 
 async function abrirProducto(codigo) {
@@ -439,7 +495,8 @@ function bind() {
   $("catalogFiltroRubro")?.addEventListener("change", () => cargarProductos({ conservarPagina: false }).catch((e) => mensaje(e.message)));
   $("catalogFiltroEstado")?.addEventListener("change", () => cargarProductos({ conservarPagina: false }).catch((e) => mensaje(e.message)));
   $("catalogFiltroImagen")?.addEventListener("change", () => cargarProductos({ conservarPagina: false }).catch((e) => mensaje(e.message)));
-  $("catalogBtnBuscarImagenes")?.addEventListener("click", buscarImagenesLote);
+  $("catalogBtnBuscarImagenes")?.addEventListener("click", iniciarProcesoImagenesMasivo);
+  $("catalogBtnPausarImagenes")?.addEventListener("click", pausarImagenes);
   $("catalogBtnRecargar")?.addEventListener("click", () => Promise.all([cargarEstado(), cargarRubros(), cargarProductos()]).catch((e) => mensaje(e.message)));
   $("catalogBtnVerPublico")?.addEventListener("click", () => window.open(new URL("./catalogo/", location.href).href, "_blank", "noopener"));
   $("catalogBtnNuevoRubro")?.addEventListener("click", () => abrirRubro());
@@ -464,8 +521,14 @@ async function activar() {
   try {
     await Promise.all([cargarEstado(), cargarRubros()]);
     await cargarProductos({ conservarPagina: false });
+    await cargarProcesoImagenes();
   } catch (e) { mensaje(e.message); }
 }
-function desactivar() { estado.activo = false; cerrarModal("catalogProductoModal"); cerrarModal("catalogRubroModal"); }
+function desactivar() {
+  estado.activo = false;
+  clearTimeout(estado.procesoImagenesTimer);
+  cerrarModal("catalogProductoModal");
+  cerrarModal("catalogRubroModal");
+}
 
 window.CatalogoAdminModule = { activar, desactivar, recargar: activar };

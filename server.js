@@ -77,7 +77,13 @@ const {
   quitarImagenCatalogoDb,
   sincronizarRubrosImportadosCatalogoDb,
 } = require("./db-catalogo-publico");
-const { buscarImagenProducto, buscarImagenesLote, obtenerImagenNormalizadaProducto, importarImagenManual } = require("./catalogo-imagenes");
+const { buscarImagenProducto, obtenerImagenNormalizadaProducto, importarImagenManual } = require("./catalogo-imagenes");
+const {
+  iniciarProcesoImagenes,
+  pausarProcesoImagenes,
+  obtenerEstadoProcesoImagenes,
+  reanudarProcesoPendienteAlIniciar,
+} = require("./catalogo-imagenes-proceso");
 const {
   asegurarEsquemaVencimientos,
   listarVencimientosDb,
@@ -1626,13 +1632,30 @@ app.post("/admin/catalogo/productos/:codigo/imagen/buscar", requerirAdministrado
   }
 });
 
-app.post("/admin/catalogo/imagenes/buscar-lote", requerirAdministrador, async (req, res) => {
+
+app.get("/admin/catalogo/imagenes/proceso", requerirAdministrador, async (_req, res) => {
   try {
-    const resumen = await buscarImagenesLote({ limite: req.body?.limite });
-    res.json({ ok: true, resumen });
+    res.json({ ok: true, proceso: await obtenerEstadoProcesoImagenes() });
   } catch (error) {
-    console.error("Error buscando imágenes por lote:", error);
-    res.status(error.status || 500).json({ ok: false, mensaje: error.message || "No se pudo procesar el lote de imágenes" });
+    res.status(500).json({ ok: false, mensaje: error.message || "No se pudo consultar el proceso de imágenes" });
+  }
+});
+
+app.post("/admin/catalogo/imagenes/proceso/iniciar", requerirAdministrador, async (req, res) => {
+  try {
+    const proceso = await iniciarProcesoImagenes({ reanudar: Boolean(req.body?.reanudar) });
+    res.json({ ok: true, proceso });
+  } catch (error) {
+    console.error("Error iniciando proceso masivo de imágenes:", error);
+    res.status(error.status || 500).json({ ok: false, mensaje: error.message || "No se pudo iniciar el proceso de imágenes" });
+  }
+});
+
+app.post("/admin/catalogo/imagenes/proceso/pausar", requerirAdministrador, async (_req, res) => {
+  try {
+    res.json({ ok: true, proceso: await pausarProcesoImagenes() });
+  } catch (error) {
+    res.status(error.status || 500).json({ ok: false, mensaje: error.message || "No se pudo pausar el proceso de imágenes" });
   }
 });
 
@@ -6514,6 +6537,7 @@ async function prepararPostgresEtapa9() {
   await asegurarVencimientosPostgres();
   await asegurarListasReposicionPostgres();
   await asegurarAuxiliaresPostgres();
+  await reanudarProcesoPendienteAlIniciar();
 
   console.log(
     "PostgreSQL Etapa 9: fuente principal validada; migraciones 2-8 completas.",

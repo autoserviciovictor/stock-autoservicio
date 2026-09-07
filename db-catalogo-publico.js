@@ -99,6 +99,27 @@ async function asegurarEsquemaCatalogoPublico() {
     await query(`CREATE INDEX IF NOT EXISTS catalog_product_settings_featured_idx
       ON catalog_product_settings(featured, visible, sort_order)`);
 
+    // P4: estado persistente del proceso masivo de imágenes. Un único job
+    // permite pausar/reanudar y continuar incluso después de un redeploy.
+    await query(`CREATE TABLE IF NOT EXISTS catalog_image_batch_state (
+      batch_id SMALLINT PRIMARY KEY DEFAULT 1 CHECK (batch_id=1),
+      status TEXT NOT NULL DEFAULT 'idle',
+      started_at TIMESTAMPTZ,
+      finished_at TIMESTAMPTZ,
+      processed INTEGER NOT NULL DEFAULT 0,
+      confirmed INTEGER NOT NULL DEFAULT 0,
+      review INTEGER NOT NULL DEFAULT 0,
+      no_result INTEGER NOT NULL DEFAULT 0,
+      errors INTEGER NOT NULL DEFAULT 0,
+      skipped INTEGER NOT NULL DEFAULT 0,
+      total_target INTEGER NOT NULL DEFAULT 0,
+      last_code TEXT NOT NULL DEFAULT '',
+      message TEXT NOT NULL DEFAULT '',
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      CONSTRAINT catalog_image_batch_state_status_valid CHECK (status IN ('idle','running','paused','finished'))
+    )`);
+    await query(`INSERT INTO catalog_image_batch_state(batch_id) VALUES(1) ON CONFLICT(batch_id) DO NOTHING`);
+
     esquemaAsegurado = true;
   })();
 
@@ -841,19 +862,100 @@ async function quitarImagenCatalogoDb(codigo) {
   }, { forzarConfirmada: true });
 }
 
-async function listarPendientesImagenCatalogoDb(limite = 20) {
+async function obtenerEstadoProcesoImagenesDb() {
   await asegurarEsquemaCatalogoPublico();
-  const cantidad = enteroEnRango(limite, 1, 60, 20);
+  const r = await query(`SELECT * FROM catalog_image_batch_state WHERE batch_id=1`);
+  const f = r.rows[0] || {};
+  return {
+    estado: String(f.status || "idle"),
+    iniciadoEn: f.started_at || null,
+    finalizadoEn: f.finished_at || null,
+    procesados: Number(f.processed) || 0,
+    confirmadas: Number(f.confirmed) || 0,
+    revisar: Number(f.review) || 0,
+    sinResultado: Number(f.no_result) || 0,
+    errores: Number(f.errors) || 0,
+    omitidas: Number(f.skipped) || 0,
+    totalObjetivo: Number(f.total_target) || 0,
+    ultimoCodigo: String(f.last_code || ""),
+    mensaje: String(f.message || ""),
+    actualizadoEn: f.updated_at || null,
+  };
+}
+
+async function iniciarProcesoImagenesDb({ reanudar = false } = {}) {
+  await asegurarEsquemaCatalogoPublico();
+  const actual = await obtenerEstadoProcesoImagenesDb();
+  if (reanudar && actual.estado === "paused" && actual.iniciadoEn) {
+    await query(`UPDATE catalog_image_batch_state
+      SET status='running', finished_at=NULL, message='', updated_at=NOW()
+      WHERE batch_id=1`);
+    return obtenerEstadoProcesoImagenesDb();
+  }
+  const c = await query(`
+    SELECT COUNT(*)::int AS total
+    FROM product_catalog p
+    LEFT JOIN catalog_product_settings s ON s.code=p.code
+    WHERE COALESCE(s.image_status,'sin_imagen') <> 'confirmada' AND s.image_data IS NULL
+  `);
+  const total = Number(c.rows[0]?.total) || 0;
+  await query(`UPDATE catalog_image_batch_state SET
+    status='running', started_at=NOW(), finished_at=NULL,
+    processed=0, confirmed=0, review=0, no_result=0, errors=0, skipped=0,
+    total_target=$1, last_code='', message='', updated_at=NOW()
+    WHERE batch_id=1`, [total]);
+  return obtenerEstadoProcesoImagenesDb();
+}
+
+async function pausarProcesoImagenesDb() {
+  await asegurarEsquemaCatalogoPublico();
+  await query(`UPDATE catalog_image_batch_state
+    SET status=CASE WHEN status='running' THEN 'paused' ELSE status END,
+        message=CASE WHEN status='running' THEN 'Pausado por el usuario' ELSE message END,
+        updated_at=NOW()
+    WHERE batch_id=1`);
+  return obtenerEstadoProcesoImagenesDb();
+}
+
+async function finalizarProcesoImagenesDb(mensaje = "") {
+  await asegurarEsquemaCatalogoPublico();
+  await query(`UPDATE catalog_image_batch_state
+    SET status='finished', finished_at=NOW(), message=$1, updated_at=NOW()
+    WHERE batch_id=1`, [textoLimitado(mensaje, 500)]);
+  return obtenerEstadoProcesoImagenesDb();
+}
+
+async function sumarResultadoProcesoImagenesDb(tipo, codigo = "") {
+  await asegurarEsquemaCatalogoPublico();
+  const columnas = {
+    confirmada: "confirmed",
+    revisar: "review",
+    sin_resultado: "no_result",
+    error: "errors",
+    omitida: "skipped",
+  };
+  const columna = columnas[tipo] || "errors";
+  await query(`UPDATE catalog_image_batch_state
+    SET processed=processed+1, ${columna}=${columna}+1, last_code=$1, updated_at=NOW()
+    WHERE batch_id=1`, [textoLimitado(codigo, 160)]);
+  return obtenerEstadoProcesoImagenesDb();
+}
+
+async function listarPendientesProcesoImagenesDb(limite = 10) {
+  await asegurarEsquemaCatalogoPublico();
+  const cantidad = enteroEnRango(limite, 1, 30, 10);
+  const estado = await obtenerEstadoProcesoImagenesDb();
+  if (!estado.iniciadoEn) return [];
   const r = await query(`
     SELECT p.code
     FROM product_catalog p
     LEFT JOIN catalog_product_settings s ON s.code=p.code
-    WHERE COALESCE(s.image_status,'sin_imagen') IN ('sin_imagen','sin_resultado','error')
+    WHERE COALESCE(s.image_status,'sin_imagen') <> 'confirmada'
       AND s.image_data IS NULL
-      AND (s.image_checked_at IS NULL OR s.image_checked_at < NOW() - INTERVAL '7 days')
+      AND (s.image_checked_at IS NULL OR s.image_checked_at < $2)
     ORDER BY s.image_checked_at NULLS FIRST, p.catalog_id
     LIMIT $1
-  `, [cantidad]);
+  `, [cantidad, estado.iniciadoEn]);
   return r.rows.map((f) => ({ codigo: String(f.code || "") }));
 }
 
@@ -877,6 +979,11 @@ module.exports = {
   confirmarCandidatoImagenCatalogoDb,
   obtenerImagenCatalogoDb,
   quitarImagenCatalogoDb,
-  listarPendientesImagenCatalogoDb,
+  obtenerEstadoProcesoImagenesDb,
+  iniciarProcesoImagenesDb,
+  pausarProcesoImagenesDb,
+  finalizarProcesoImagenesDb,
+  sumarResultadoProcesoImagenesDb,
+  listarPendientesProcesoImagenesDb,
   sincronizarRubrosImportadosCatalogoDb,
 };

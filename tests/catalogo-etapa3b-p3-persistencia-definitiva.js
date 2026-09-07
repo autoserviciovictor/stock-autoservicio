@@ -1,0 +1,11 @@
+const fs = require('fs');
+const assert = require('assert');
+const img = fs.readFileSync('catalogo-imagenes.js','utf8');
+const db = fs.readFileSync('db-catalogo-publico.js','utf8');
+assert(db.includes('image_data BYTEA'), 'la imagen final no queda almacenada en PostgreSQL');
+assert(img.includes('imagenData: valido.normalizada'), 'la selección automática no guarda el binario normalizado');
+assert(img.includes('estado: ESTADOS_IMAGEN.CONFIRMADA'), 'la imagen automática no queda confirmada');
+assert(img.includes('motivo: "imagen_confirmada"') && img.includes('omitido: true'), 'una imagen confirmada podría volver a buscarse');
+assert(db.includes('tieneImagenConfirmada(s) && !forzarConfirmada'), 'la BD no protege imágenes confirmadas');
+assert(!img.includes('}, { forzarConfirmada: true });\n\n      return {\n        encontrado: true,\n        confirmado: true,\n        automatico: true'), 'el flujo automático no debe forzar la sobrescritura de confirmadas');
+console.log('OK P3 persistencia: descarga única, almacenamiento propio y no sobrescritura');
