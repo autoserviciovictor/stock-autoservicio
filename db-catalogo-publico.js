@@ -1,4 +1,11 @@
 const { query } = require("./db");
+const {
+  ESTADOS_IMAGEN,
+  ESTADOS_IMAGEN_VALIDOS,
+  normalizarEstadoImagen,
+  tieneImagenConfirmada,
+  validarTransicionImagen,
+} = require("./catalogo-imagenes-estado");
 
 function ejecutarConsultaCatalogo(cliente, texto, parametros = []) {
   return cliente ? cliente.query(texto, parametros) : query(texto, parametros);
@@ -8,7 +15,6 @@ let esquemaAsegurado = false;
 let promesaEsquema = null;
 
 const UNIDADES_VENTA = ["unidad", "kg", "pack", "cajon", "bulto", "litro", "metro"];
-const ESTADOS_IMAGEN = ["sin_imagen", "pendiente", "confirmada", "revisar"];
 
 async function asegurarEsquemaCatalogoPublico() {
   if (esquemaAsegurado) return;
@@ -63,7 +69,7 @@ async function asegurarEsquemaCatalogoPublico() {
         sale_unit IN ('unidad','kg','pack','cajon','bulto','litro','metro')
       ),
       CONSTRAINT catalog_product_settings_image_status_valid CHECK (
-        image_status IN ('sin_imagen','pendiente','confirmada','revisar')
+        image_status IN ('sin_imagen','buscando','candidato','confirmada','sin_resultado','error')
       )
     )`);
     await query(`ALTER TABLE catalog_product_settings ADD COLUMN IF NOT EXISTS image_candidate_url TEXT NOT NULL DEFAULT ''`);
@@ -76,6 +82,14 @@ async function asegurarEsquemaCatalogoPublico() {
     await query(`ALTER TABLE catalog_product_settings ADD COLUMN IF NOT EXISTS image_candidate_mime TEXT NOT NULL DEFAULT ''`);
     await query(`ALTER TABLE catalog_product_settings ADD COLUMN IF NOT EXISTS image_checked_at TIMESTAMPTZ`);
     await query(`ALTER TABLE catalog_product_settings ADD COLUMN IF NOT EXISTS image_error TEXT NOT NULL DEFAULT ''`);
+    // Migración P1A: consolidamos los estados históricos en un único ciclo de vida.
+    await query(`ALTER TABLE catalog_product_settings DROP CONSTRAINT IF EXISTS catalog_product_settings_image_status_valid`);
+    await query(`UPDATE catalog_product_settings SET image_status='buscando' WHERE image_status='pendiente'`);
+    await query(`UPDATE catalog_product_settings SET image_status='candidato' WHERE image_status='revisar'`);
+    await query(`UPDATE catalog_product_settings SET image_status='sin_imagen'
+      WHERE image_status IS NULL OR image_status NOT IN ('sin_imagen','buscando','candidato','confirmada','sin_resultado','error')`);
+    await query(`ALTER TABLE catalog_product_settings ADD CONSTRAINT catalog_product_settings_image_status_valid
+      CHECK (image_status IN ('sin_imagen','buscando','candidato','confirmada','sin_resultado','error'))`);
     await query(`CREATE INDEX IF NOT EXISTS catalog_product_settings_image_status_idx
       ON catalog_product_settings(image_status, image_checked_at, code)`);
     await query(`CREATE INDEX IF NOT EXISTS catalog_product_settings_public_idx
@@ -138,7 +152,7 @@ async function listarRubrosPublicosDb() {
     WHERE c.active=TRUE
     GROUP BY c.category_id, c.name, c.slug, c.description, c.image_url, c.sort_order
     HAVING COUNT(p.code) > 0
-    ORDER BY c.sort_order, c.name, c.category_id
+    ORDER BY c.name, c.category_id
   `);
   return resultado.rows.map((fila) => ({
     id: Number(fila.category_id),
@@ -205,7 +219,7 @@ async function listarProductosPublicosDb(opciones = {}) {
      JOIN catalog_product_settings s ON s.code=p.code
      JOIN catalog_categories c ON c.category_id=s.category_id
      WHERE ${where}
-     ORDER BY s.featured DESC, c.sort_order, s.sort_order, p.article, p.code
+     ORDER BY s.featured DESC, c.name, p.article, p.code
      LIMIT $${limiteParam} OFFSET $${offsetParam}`,
     parametros,
   );
@@ -263,8 +277,10 @@ async function obtenerEstadoCatalogoAdminDb() {
       (SELECT COUNT(*)::int FROM catalog_product_settings WHERE visible=TRUE) AS visibles,
       (SELECT COUNT(*)::int FROM catalog_product_settings WHERE visible=FALSE) AS ocultos_configurados,
       (SELECT COUNT(*)::int FROM catalog_product_settings WHERE image_status='confirmada') AS imagenes_confirmadas,
-      (SELECT COUNT(*)::int FROM catalog_product_settings WHERE image_status='revisar') AS imagenes_revisar,
-      (SELECT COUNT(*)::int FROM catalog_product_settings WHERE image_status='pendiente') AS imagenes_pendientes,
+      (SELECT COUNT(*)::int FROM catalog_product_settings WHERE image_status='candidato') AS imagenes_candidatas,
+      (SELECT COUNT(*)::int FROM catalog_product_settings WHERE image_status='buscando') AS imagenes_buscando,
+      (SELECT COUNT(*)::int FROM catalog_product_settings WHERE image_status='sin_resultado') AS imagenes_sin_resultado,
+      (SELECT COUNT(*)::int FROM catalog_product_settings WHERE image_status='error') AS imagenes_error,
       (SELECT COUNT(*)::int FROM catalog_categories) AS rubros,
       (SELECT COUNT(*)::int FROM catalog_categories WHERE active=TRUE) AS rubros_activos
   `);
@@ -279,9 +295,11 @@ async function obtenerEstadoCatalogoAdminDb() {
     configurados,
     pendientesConfigurar: Math.max(0, total - configurados),
     imagenesConfirmadas: Number(f.imagenes_confirmadas) || 0,
-    imagenesRevisar: Number(f.imagenes_revisar) || 0,
-    imagenesPendientes: Number(f.imagenes_pendientes) || 0,
-    imagenesSinImagen: Math.max(0, total - (Number(f.imagenes_confirmadas) || 0) - (Number(f.imagenes_revisar) || 0) - (Number(f.imagenes_pendientes) || 0)),
+    imagenesCandidatas: Number(f.imagenes_candidatas) || 0,
+    imagenesBuscando: Number(f.imagenes_buscando) || 0,
+    imagenesSinResultado: Number(f.imagenes_sin_resultado) || 0,
+    imagenesError: Number(f.imagenes_error) || 0,
+    imagenesSinImagen: Math.max(0, total - (Number(f.imagenes_confirmadas) || 0) - (Number(f.imagenes_candidatas) || 0) - (Number(f.imagenes_buscando) || 0) - (Number(f.imagenes_sin_resultado) || 0) - (Number(f.imagenes_error) || 0)),
     rubros: Number(f.rubros) || 0,
     rubrosActivos: Number(f.rubros_activos) || 0,
   };
@@ -296,7 +314,7 @@ async function listarRubrosAdminDb() {
     FROM catalog_categories c
     LEFT JOIN catalog_product_settings s ON s.category_id=c.category_id
     GROUP BY c.category_id, c.name, c.slug, c.description, c.image_url, c.active, c.sort_order
-    ORDER BY c.sort_order, c.name, c.category_id
+    ORDER BY c.name, c.category_id
   `);
   return r.rows.map((f) => ({
     id: Number(f.category_id),
@@ -334,7 +352,7 @@ async function crearRubroCatalogoAdminDb(datos = {}) {
     textoLimitado(datos.descripcion, 500),
     textoLimitado(datos.imagen, 600),
     booleano(datos.activo, true),
-    enteroEnRango(datos.orden, -100000, 100000, 0),
+    0,
   ]);
   return Number(r.rows[0]?.category_id);
 }
@@ -358,7 +376,7 @@ async function actualizarRubroCatalogoAdminDb(id, datos = {}) {
     datos.descripcion === undefined ? f.description : textoLimitado(datos.descripcion, 500),
     datos.imagen === undefined ? f.image_url : textoLimitado(datos.imagen, 600),
     datos.activo === undefined ? Boolean(f.active) : booleano(datos.activo, Boolean(f.active)),
-    datos.orden === undefined ? Number(f.sort_order) || 0 : enteroEnRango(datos.orden, -100000, 100000, Number(f.sort_order) || 0),
+    Number(f.sort_order) || 0,
   ]);
   return Boolean(r.rowCount);
 }
@@ -406,8 +424,8 @@ async function sincronizarRubrosImportadosCatalogoDb(productos = [], cliente = n
   for (const rubro of rubrosUnicos) {
     await ejecutarConsultaCatalogo(cliente, `
       INSERT INTO catalog_categories(name, slug, active, sort_order, updated_at)
-      VALUES($1,$2,TRUE,(SELECT COALESCE(MAX(sort_order),-1)+1 FROM catalog_categories),NOW())
-      ON CONFLICT(slug) DO UPDATE SET active=TRUE, updated_at=NOW()
+      VALUES($1,$2,TRUE,0,NOW())
+      ON CONFLICT(slug) DO UPDATE SET active=TRUE, name=EXCLUDED.name, updated_at=NOW()
     `, [rubro.nombre, rubro.slug]);
   }
 
@@ -487,8 +505,10 @@ async function listarProductosCatalogoAdminDb(opciones = {}) {
   else if (estado === "sin-configurar") condiciones.push("s.code IS NULL");
   else if (estado === "destacado") condiciones.push("s.featured=TRUE");
   if (estadoImagen === "confirmada") condiciones.push("s.image_status='confirmada'");
-  else if (estadoImagen === "revisar") condiciones.push("s.image_status='revisar'");
-  else if (estadoImagen === "pendiente") condiciones.push("s.image_status='pendiente'");
+  else if (estadoImagen === "candidato") condiciones.push("s.image_status='candidato'");
+  else if (estadoImagen === "buscando") condiciones.push("s.image_status='buscando'");
+  else if (estadoImagen === "sin_resultado") condiciones.push("s.image_status='sin_resultado'");
+  else if (estadoImagen === "error") condiciones.push("s.image_status='error'");
   else if (estadoImagen === "sin_imagen") condiciones.push("COALESCE(s.image_status,'sin_imagen')='sin_imagen'");
   const where = condiciones.join(" AND ");
   const conteo = await query(`
@@ -520,7 +540,7 @@ async function listarProductosCatalogoAdminDb(opciones = {}) {
     LEFT JOIN catalog_product_settings s ON s.code=p.code
     LEFT JOIN catalog_categories c ON c.category_id=s.category_id
     WHERE ${where}
-    ORDER BY COALESCE(s.visible,FALSE) DESC, COALESCE(c.sort_order,2147483647), COALESCE(s.sort_order,0), p.article, p.code
+    ORDER BY COALESCE(s.visible,FALSE) DESC, COALESCE(c.name,'zzzzzzzz'), p.article, p.code
     LIMIT $${parametros.length - 1} OFFSET $${parametros.length}
   `, parametros);
   const total = Number(conteo.rows[0]?.total) || 0;
@@ -539,7 +559,7 @@ async function listarProductosCatalogoAdminDb(opciones = {}) {
       presentacion: String(f.presentation || ""),
       unidadVenta: String(f.sale_unit || "unidad"),
       imagen: String(f.image_url || ""),
-      estadoImagen: String(f.image_status || "sin_imagen"),
+      estadoImagen: normalizarEstadoImagen(f.image_status),
       fuenteImagen: String(f.image_source || ""),
       candidatoImagen: String(f.image_candidate_url || ""),
       candidatoFuente: String(f.image_candidate_source || ""),
@@ -597,7 +617,7 @@ async function obtenerProductoCatalogoAdminDb(codigo) {
     unidadVenta: String(f.sale_unit || "unidad"),
     imagen: String(f.image_url || ""),
     fuenteImagen: String(f.image_source || ""),
-    estadoImagen: String(f.image_status || "sin_imagen"),
+    estadoImagen: normalizarEstadoImagen(f.image_status),
     candidatoImagen: String(f.image_candidate_url || ""),
     candidatoFuente: String(f.image_candidate_source || ""),
     candidatoTitulo: String(f.image_candidate_title || ""),
@@ -666,12 +686,12 @@ async function actualizarProductoCatalogoAdminDb(codigo, cambios = {}) {
     cambios.marca === undefined ? String(s.brand || "") : textoLimitado(cambios.marca, 120),
     cambios.presentacion === undefined ? String(s.presentation || "") : textoLimitado(cambios.presentacion, 120),
     saleUnit,
-    cambios.imagen === undefined ? String(s.image_url || "") : textoLimitado(cambios.imagen, 600),
+    String(s.image_url || ""),
     String(s.image_source || ""),
-    String(s.image_status || "sin_imagen"),
+    normalizarEstadoImagen(s.image_status),
     visibleFinal,
     cambios.destacado === undefined ? Boolean(s.featured) : booleano(cambios.destacado, Boolean(s.featured)),
-    cambios.orden === undefined ? Number(s.sort_order) || 0 : enteroEnRango(cambios.orden, -100000, 100000, Number(s.sort_order) || 0),
+    Number(s.sort_order) || 0,
   ]);
   return obtenerProductoCatalogoAdminDb(code);
 }
@@ -680,7 +700,7 @@ async function actualizarVisibilidadProductoCatalogoAdminDb(codigo, visible) {
   return actualizarProductoCatalogoAdminDb(codigo, { visible });
 }
 
-async function guardarResultadoImagenCatalogoDb(codigo, datos = {}) {
+async function guardarResultadoImagenCatalogoDb(codigo, datos = {}, opciones = {}) {
   await asegurarEsquemaCatalogoPublico();
   const code = textoLimitado(codigo, 160);
   if (!code) throw new Error("Código de producto inválido");
@@ -688,8 +708,30 @@ async function guardarResultadoImagenCatalogoDb(codigo, datos = {}) {
   if (!existe.rowCount) throw new Error("El producto no existe en el catálogo maestro");
   const actual = await query(`SELECT * FROM catalog_product_settings WHERE code=$1`, [code]);
   const s = actual.rows[0] || {};
-  const estado = textoLimitado(datos.estado === undefined ? (s.image_status || "sin_imagen") : datos.estado, 30);
-  if (!ESTADOS_IMAGEN.includes(estado)) throw new Error("Estado de imagen inválido");
+  const estadoActual = normalizarEstadoImagen(s.image_status);
+  const estadoSolicitado = normalizarEstadoImagen(datos.estado === undefined ? estadoActual : datos.estado);
+  const forzarConfirmada = opciones.forzarConfirmada === true;
+
+  // Regla central P1A: una imagen binaria confirmada es permanente. Solo una
+  // acción explícita de reemplazo/quitar puede modificarla.
+  if (tieneImagenConfirmada(s) && !forzarConfirmada) {
+    const intentaModificarConfirmada = datos.estado !== undefined
+      || datos.imagen !== undefined
+      || datos.fuente !== undefined
+      || datos.imagenData !== undefined
+      || datos.imagenMime !== undefined
+      || datos.candidatoUrl !== undefined
+      || datos.candidatoFuente !== undefined
+      || datos.candidatoTitulo !== undefined
+      || datos.candidatoPuntaje !== undefined
+      || datos.candidatoData !== undefined
+      || datos.candidatoMime !== undefined;
+    if (intentaModificarConfirmada) {
+      throw new Error("La imagen confirmada está protegida y no puede ser sobrescrita automáticamente");
+    }
+  }
+  const estado = validarTransicionImagen(estadoActual, estadoSolicitado, { forzar: forzarConfirmada });
+
   await query(`
     INSERT INTO catalog_product_settings(
       code, category_id, brand, presentation, sale_unit,
@@ -745,7 +787,7 @@ async function confirmarCandidatoImagenCatalogoDb(codigo) {
   return guardarResultadoImagenCatalogoDb(code, {
     imagen: r.rows[0].image_candidate_url || "",
     fuente: r.rows[0].image_candidate_source || "Revisión manual",
-    estado: "confirmada",
+    estado: ESTADOS_IMAGEN.CONFIRMADA,
     imagenData: r.rows[0].image_candidate_data,
     imagenMime: r.rows[0].image_candidate_mime || "image/jpeg",
     candidatoUrl: "",
@@ -761,21 +803,15 @@ async function confirmarCandidatoImagenCatalogoDb(codigo) {
 async function obtenerImagenCatalogoDb(codigo, tipo = "confirmada") {
   await asegurarEsquemaCatalogoPublico();
   const code = textoLimitado(codigo, 160);
-  const r = await query(`SELECT image_data, image_mime, image_candidate_data, image_candidate_mime FROM catalog_product_settings WHERE code=$1`, [code]);
+  const r = await query(`SELECT image_status, image_data, image_mime, image_candidate_data, image_candidate_mime FROM catalog_product_settings WHERE code=$1`, [code]);
   if (!r.rowCount) return null;
   const f = r.rows[0];
   if (tipo === "candidato") {
-    if (!f.image_candidate_data) return null;
+    if (normalizarEstadoImagen(f.image_status) !== ESTADOS_IMAGEN.CANDIDATO || !f.image_candidate_data) return null;
     return { data: f.image_candidate_data, mime: String(f.image_candidate_mime || "image/jpeg") };
   }
-  if (!f.image_data) return null;
+  if (normalizarEstadoImagen(f.image_status) !== ESTADOS_IMAGEN.CONFIRMADA || !f.image_data) return null;
   return { data: f.image_data, mime: String(f.image_mime || "image/jpeg") };
-}
-
-async function guardarImagenManualCatalogoDb(codigo, imagen) {
-  const url = String(imagen || "").trim();
-  if (!/^https:\/\//i.test(url)) throw new Error("La imagen debe usar una URL HTTPS válida");
-  return guardarResultadoImagenCatalogoDb(codigo, { imagen: url, fuente: "Manual", estado: "revisar", error: "La URL debe descargarse y validarse antes de confirmarse." });
 }
 
 async function quitarImagenCatalogoDb(codigo) {
@@ -792,7 +828,7 @@ async function quitarImagenCatalogoDb(codigo) {
     candidatoData: null,
     candidatoMime: "",
     error: "",
-  });
+  }, { forzarConfirmada: true });
 }
 
 async function listarPendientesImagenCatalogoDb(limite = 20) {
@@ -802,8 +838,8 @@ async function listarPendientesImagenCatalogoDb(limite = 20) {
     SELECT p.code
     FROM product_catalog p
     LEFT JOIN catalog_product_settings s ON s.code=p.code
-    WHERE COALESCE(s.image_status,'sin_imagen')='sin_imagen'
-      AND COALESCE(s.image_url,'')=''
+    WHERE COALESCE(s.image_status,'sin_imagen') IN ('sin_imagen','sin_resultado','error')
+      AND s.image_data IS NULL
       AND (s.image_checked_at IS NULL OR s.image_checked_at < NOW() - INTERVAL '7 days')
     ORDER BY s.image_checked_at NULLS FIRST, p.catalog_id
     LIMIT $1
@@ -813,7 +849,7 @@ async function listarPendientesImagenCatalogoDb(limite = 20) {
 
 module.exports = {
   UNIDADES_VENTA,
-  ESTADOS_IMAGEN,
+  ESTADOS_IMAGEN: ESTADOS_IMAGEN_VALIDOS,
   asegurarEsquemaCatalogoPublico,
   obtenerEstadoCatalogoPublicoDb,
   listarRubrosPublicosDb,
@@ -830,7 +866,6 @@ module.exports = {
   guardarResultadoImagenCatalogoDb,
   confirmarCandidatoImagenCatalogoDb,
   obtenerImagenCatalogoDb,
-  guardarImagenManualCatalogoDb,
   quitarImagenCatalogoDb,
   listarPendientesImagenCatalogoDb,
   sincronizarRubrosImportadosCatalogoDb,

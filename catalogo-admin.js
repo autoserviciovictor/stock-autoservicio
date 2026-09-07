@@ -102,7 +102,7 @@ async function cargarProductos({ conservarPagina = true } = {}) {
   estado.cargando = true;
   if (!conservarPagina) estado.pagina = 1;
   const body = $("catalogProductosBody");
-  if (body) body.innerHTML = '<tr><td colspan="7"><div class="catalog-loading">Cargando productos…</div></td></tr>';
+  if (body) body.innerHTML = '<tr><td colspan="6"><div class="catalog-loading">Cargando productos…</div></td></tr>';
   try {
     const data = await api(`/admin/catalogo/productos?${parametrosProductos()}`);
     estado.productos = data.productos || [];
@@ -123,17 +123,16 @@ function renderProductos() {
   const body = $("catalogProductosBody");
   if (!body) return;
   if (!estado.productos.length) {
-    body.innerHTML = '<tr><td colspan="7"><div class="catalog-empty">No hay productos que coincidan con los filtros.</div></td></tr>';
+    body.innerHTML = '<tr><td colspan="6"><div class="catalog-empty">No hay productos que coincidan con los filtros.</div></td></tr>';
   } else {
     body.innerHTML = estado.productos.map((p) => {
       const chip = !p.configurado ? '<span class="catalog-chip unconfigured">Sin configurar</span>' : p.visible ? '<span class="catalog-chip visible">Visible</span>' : '<span class="catalog-chip hidden">Oculto</span>';
       return `<tr data-code="${esc(p.codigo)}">
-        <td><div class="catalog-product-cell"><span class="catalog-product-thumb ${p.imagen ? "has-image" : ""}">${p.estadoImagen === "confirmada" ? `<img src="${API_BASE_URL}/catalogo/api/productos/${encodeURIComponent(p.codigo)}/imagen" alt="" loading="lazy" />` : '<svg class="app-icon"><use href="#icon-box"></use></svg>'}</span><div class="catalog-product-copy"><strong title="${esc(p.nombre)}">${esc(p.nombre)}</strong><small>${esc(p.codigo)}${p.destacado ? " · Destacado" : ""} · ${esc(({confirmada:"Imagen confirmada",revisar:"Revisar imagen",pendiente:"Imagen pendiente",sin_imagen:"Sin imagen"})[p.estadoImagen] || "Sin imagen")}</small></div></div></td>
+        <td><div class="catalog-product-cell"><span class="catalog-product-thumb ${p.imagen ? "has-image" : ""}">${p.estadoImagen === "confirmada" ? `<img src="${API_BASE_URL}/catalogo/api/productos/${encodeURIComponent(p.codigo)}/imagen" alt="" loading="lazy" />` : '<svg class="app-icon"><use href="#icon-box"></use></svg>'}</span><div class="catalog-product-copy"><strong title="${esc(p.nombre)}">${esc(p.nombre)}</strong><small>${esc(p.codigo)}${p.destacado ? " · Destacado" : ""} · ${esc(({confirmada:"Imagen confirmada",candidato:"Imagen candidata",buscando:"Buscando imagen",sin_resultado:"Sin resultado",error:"Error de imagen",sin_imagen:"Sin imagen"})[p.estadoImagen] || "Sin imagen")}</small></div></div></td>
         <td>${p.rubro ? esc(p.rubro) : '<span class="catalog-chip unconfigured">Sin rubro</span>'}</td>
         <td><span class="catalog-price">${moneda(p.precio)}</span></td>
         <td>${esc(etiquetaUnidad(p.unidadVenta))}</td>
         <td>${chip}</td>
-        <td class="catalog-col-order">${Number(p.orden) || 0}</td>
         <td><div class="catalog-row-actions"><label class="catalog-visibility-toggle" title="${p.visible ? "Ocultar producto" : "Mostrar producto"}"><input type="checkbox" data-catalog-visible="${esc(p.codigo)}" ${p.visible ? "checked" : ""}><span></span></label><button class="catalog-edit-btn" type="button" data-catalog-edit="${esc(p.codigo)}">Editar</button></div></td>
       </tr>`;
     }).join("");
@@ -187,7 +186,7 @@ function cambiarTab(tab) {
 }
 
 function etiquetaEstadoImagen(valor) {
-  return ({ confirmada: "Confirmada", revisar: "Revisar", pendiente: "Pendiente", sin_imagen: "Sin imagen" })[valor] || "Sin imagen";
+  return ({ confirmada: "Confirmada", candidato: "Candidata", buscando: "Buscando", sin_resultado: "Sin resultado", error: "Error", sin_imagen: "Sin imagen" })[valor] || "Sin imagen";
 }
 
 function renderImagenProducto(p = {}) {
@@ -327,7 +326,7 @@ async function buscarImagenesLote() {
     const data = await api("/admin/catalogo/imagenes/buscar-lote", { method: "POST", body: JSON.stringify({ limite: 20 }) });
     const r = data.resumen || {};
     await Promise.all([cargarEstado(), cargarProductos()]);
-    mensaje(`Procesados ${numero(r.procesados)} · confirmadas ${numero(r.confirmadas)} · revisar ${numero(r.revisar)} · sin imagen ${numero(r.sinImagen)}`, "ok");
+    mensaje(`Procesados ${numero(r.procesados)} · confirmadas ${numero(r.confirmadas)} · candidatas ${numero(r.candidatas)} · sin resultado ${numero(r.sinResultado)} · errores ${numero(r.errores)}`, "ok");
   } catch (e) { mensaje(e.message); }
   finally { boton.disabled = false; if (texto) texto.textContent = anterior; }
 }
@@ -345,7 +344,6 @@ async function abrirProducto(codigo) {
     $("catalogProductoMarca").value = p.marca || "";
     $("catalogProductoPresentacion").value = p.presentacion || "";
     $("catalogProductoUnidad").value = p.unidadVenta || "unidad";
-    $("catalogProductoOrden").value = Number(p.orden) || 0;
     $("catalogProductoVisible").checked = Boolean(p.visible);
     $("catalogProductoDestacado").checked = Boolean(p.destacado);
     renderImagenProducto(p);
@@ -367,7 +365,6 @@ async function guardarProducto() {
       marca: $("catalogProductoMarca").value,
       presentacion: $("catalogProductoPresentacion").value,
       unidadVenta: $("catalogProductoUnidad").value,
-      orden: Number($("catalogProductoOrden").value) || 0,
       visible: $("catalogProductoVisible").checked,
       destacado: $("catalogProductoDestacado").checked,
     }) });
@@ -387,7 +384,7 @@ function renderRubros() {
   }
   cont.innerHTML = estado.rubros.map((r) => `<article class="catalog-rubro-card ${r.activo ? "" : "catalog-rubro-inactive"}">
     <span class="catalog-rubro-icon"><svg class="app-icon"><use href="#icon-tag"></use></svg></span>
-    <div class="catalog-rubro-copy"><strong>${esc(r.nombre)}</strong><small>${esc(r.slug)}</small><div class="catalog-rubro-meta"><span>${numero(r.productos)} productos</span><span>${numero(r.visibles)} visibles</span><span>Orden ${Number(r.orden)||0}</span><span>${r.activo ? "Activo" : "Inactivo"}</span></div></div>
+    <div class="catalog-rubro-copy"><strong>${esc(r.nombre)}</strong><small>${esc(r.slug)}</small><div class="catalog-rubro-meta"><span>${numero(r.productos)} productos</span><span>${numero(r.visibles)} visibles</span><span>${r.activo ? "Activo" : "Inactivo"}</span></div></div>
     <div class="catalog-rubro-actions"><button type="button" class="catalog-edit-btn" data-rubro-edit="${r.id}">Editar</button></div>
   </article>`).join("");
   cont.querySelectorAll("[data-rubro-edit]").forEach((b) => b.addEventListener("click", () => abrirRubro(Number(b.dataset.rubroEdit))));
@@ -398,7 +395,6 @@ function abrirRubro(id = null) {
   $("catalogRubroId").value = r?.id || "";
   $("catalogRubroModalTitulo").textContent = r ? "Editar rubro" : "Nuevo rubro";
   $("catalogRubroNombre").value = r?.nombre || "";
-  $("catalogRubroOrden").value = r?.orden ?? estado.rubros.length;
   $("catalogRubroDescripcion").value = r?.descripcion || "";
   $("catalogRubroActivo").checked = r ? Boolean(r.activo) : true;
   $("catalogRubroEliminar").classList.toggle("oculto", !r);
@@ -410,7 +406,7 @@ async function guardarRubro() {
   const boton = $("catalogRubroGuardar");
   boton.disabled = true;
   try {
-    await api(id ? `/admin/catalogo/rubros/${id}` : "/admin/catalogo/rubros", { method: id ? "PUT" : "POST", body: JSON.stringify({ nombre: $("catalogRubroNombre").value, orden: Number($("catalogRubroOrden").value) || 0, descripcion: $("catalogRubroDescripcion").value, activo: $("catalogRubroActivo").checked }) });
+    await api(id ? `/admin/catalogo/rubros/${id}` : "/admin/catalogo/rubros", { method: id ? "PUT" : "POST", body: JSON.stringify({ nombre: $("catalogRubroNombre").value, descripcion: $("catalogRubroDescripcion").value, activo: $("catalogRubroActivo").checked }) });
     cerrarModal("catalogRubroModal");
     await Promise.all([cargarRubros(), cargarEstado(), cargarProductos()]);
     mensaje(id ? "Rubro actualizado." : "Rubro creado.", "ok");

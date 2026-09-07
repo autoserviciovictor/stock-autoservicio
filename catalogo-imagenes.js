@@ -5,6 +5,7 @@ const {
   obtenerImagenCatalogoDb,
   listarPendientesImagenCatalogoDb,
 } = require("./db-catalogo-publico");
+const { ESTADOS_IMAGEN } = require("./catalogo-imagenes-estado");
 
 const OFF_TIMEOUT_MS = 6500;
 const BRAVE_TIMEOUT_MS = 7000;
@@ -311,47 +312,90 @@ async function buscarImagenProducto(codigo, { guardar = true } = {}) {
   const producto = await obtenerProductoCatalogoAdminDb(codigo);
   if (!producto) throw new Error("Producto no encontrado");
 
-  // Prioridad 1: coincidencia exacta por EAN en bases de productos.
-  // Prioridad 2: búsqueda comercial por nombre/marca/presentación con Brave Search.
-  let candidato = await buscarPorEAN(producto.codigo);
-  if (!candidato) candidato = await buscarBrave(producto);
-
-  if (!guardar) return { producto, candidato };
-
-  if (candidato) {
-    await guardarResultadoImagenCatalogoDb(producto.codigo, {
-      estado: "revisar",
-      candidatoUrl: candidato.url,
-      candidatoFuente: candidato.fuente,
-      candidatoTitulo: candidato.titulo,
-      candidatoPuntaje: candidato.puntaje,
-      candidatoData: candidato.normalizada,
-      candidatoMime: candidato.mime || "image/jpeg",
-      error: "",
-    });
+  // P1A: una imagen confirmada y almacenada es definitiva para cualquier
+  // proceso automático. Solo Quitar/Reemplazar manualmente puede modificarla.
+  const confirmada = await obtenerImagenCatalogoDb(producto.codigo, "confirmada");
+  if (producto.estadoImagen === ESTADOS_IMAGEN.CONFIRMADA && confirmada?.data) {
     return {
       encontrado: true,
-      confirmado: false,
-      candidato,
-      producto: await obtenerProductoCatalogoAdminDb(producto.codigo),
+      confirmado: true,
+      omitido: true,
+      motivo: "imagen_confirmada",
+      producto,
     };
   }
 
-  const braveConfigurado = Boolean(String(process.env.BRAVE_SEARCH_API_KEY || "").trim());
-  const error = braveConfigurado
-    ? "No se encontró una imagen que cumpla fondo blanco, producto completo y buena resolución. Podés pegar una URL manual o volver a intentar más adelante."
-    : "No se encontró una imagen válida por EAN. Para ampliar la búsqueda por nombre, marca y presentación configurá BRAVE_SEARCH_API_KEY en Render.";
+  if (!guardar) {
+    let candidato = await buscarPorEAN(producto.codigo);
+    if (!candidato) candidato = await buscarBrave(producto);
+    return { producto, candidato };
+  }
+
   await guardarResultadoImagenCatalogoDb(producto.codigo, {
-    estado: "sin_imagen",
+    estado: ESTADOS_IMAGEN.BUSCANDO,
     candidatoUrl: "",
     candidatoFuente: "",
     candidatoTitulo: "",
     candidatoPuntaje: 0,
     candidatoData: null,
     candidatoMime: "",
-    error,
+    error: "",
   });
-  return { encontrado: false, confirmado: false, candidato: null, mensaje: error, requiereConfiguracion: !braveConfigurado, producto: await obtenerProductoCatalogoAdminDb(producto.codigo) };
+
+  try {
+    // P1B ampliará esta capa de búsqueda. P1A deja una sola entrada y una sola
+    // salida de estado para que ninguna fuente escriba directamente en la BD.
+    let candidato = await buscarPorEAN(producto.codigo);
+    if (!candidato) candidato = await buscarBrave(producto);
+
+    if (candidato) {
+      await guardarResultadoImagenCatalogoDb(producto.codigo, {
+        estado: ESTADOS_IMAGEN.CANDIDATO,
+        candidatoUrl: candidato.url,
+        candidatoFuente: candidato.fuente,
+        candidatoTitulo: candidato.titulo,
+        candidatoPuntaje: candidato.puntaje,
+        candidatoData: candidato.normalizada,
+        candidatoMime: candidato.mime || "image/jpeg",
+        error: "",
+      });
+      return {
+        encontrado: true,
+        confirmado: false,
+        candidato,
+        producto: await obtenerProductoCatalogoAdminDb(producto.codigo),
+      };
+    }
+
+    const braveConfigurado = Boolean(String(process.env.BRAVE_SEARCH_API_KEY || "").trim());
+    const mensaje = braveConfigurado
+      ? "No se encontró una imagen válida para este producto."
+      : "No se encontró una imagen válida por EAN. La búsqueda ampliada requiere BRAVE_SEARCH_API_KEY.";
+    await guardarResultadoImagenCatalogoDb(producto.codigo, {
+      estado: ESTADOS_IMAGEN.SIN_RESULTADO,
+      candidatoUrl: "",
+      candidatoFuente: "",
+      candidatoTitulo: "",
+      candidatoPuntaje: 0,
+      candidatoData: null,
+      candidatoMime: "",
+      error: mensaje,
+    });
+    return {
+      encontrado: false,
+      confirmado: false,
+      candidato: null,
+      mensaje,
+      requiereConfiguracion: !braveConfigurado,
+      producto: await obtenerProductoCatalogoAdminDb(producto.codigo),
+    };
+  } catch (error) {
+    await guardarResultadoImagenCatalogoDb(producto.codigo, {
+      estado: ESTADOS_IMAGEN.ERROR,
+      error: error?.message || "Error inesperado durante la búsqueda de imagen",
+    });
+    throw error;
+  }
 }
 
 async function obtenerImagenNormalizadaProducto(codigo, tipo = "candidato") {
@@ -371,7 +415,7 @@ async function obtenerImagenNormalizadaProducto(codigo, tipo = "candidato") {
   if (esCandidato) {
     await guardarResultadoImagenCatalogoDb(codigo, { candidatoData: normalizada, candidatoMime: "image/jpeg", error: "" });
   } else {
-    await guardarResultadoImagenCatalogoDb(codigo, { imagenData: normalizada, imagenMime: "image/jpeg", error: "" });
+    await guardarResultadoImagenCatalogoDb(codigo, { imagenData: normalizada, imagenMime: "image/jpeg", error: "" }, { forzarConfirmada: true });
   }
   return { buffer: normalizada, mime: "image/jpeg" };
 }
@@ -390,7 +434,7 @@ async function importarImagenManual(codigo, url) {
   await guardarResultadoImagenCatalogoDb(producto.codigo, {
     imagen: String(url || "").trim(),
     fuente: "Manual · descargada y normalizada",
-    estado: "confirmada",
+    estado: ESTADOS_IMAGEN.CONFIRMADA,
     imagenData: normalizada,
     imagenMime: "image/jpeg",
     candidatoUrl: "",
@@ -400,7 +444,7 @@ async function importarImagenManual(codigo, url) {
     candidatoData: null,
     candidatoMime: "",
     error: "",
-  });
+  }, { forzarConfirmada: true });
   return obtenerProductoCatalogoAdminDb(producto.codigo);
 }
 
@@ -423,12 +467,13 @@ async function buscarImagenesLote({ limite = 20 } = {}) {
   const cantidad = Math.max(1, Math.min(MAX_LOTE, Number(limite) || 20));
   const pendientes = await listarPendientesImagenCatalogoDb(cantidad);
   const resultados = await mapConcurrencia(pendientes, CONCURRENCIA, (p) => buscarImagenProducto(p.codigo));
-  const resumen = { procesados: pendientes.length, confirmadas: 0, revisar: 0, sinImagen: 0, errores: 0 };
+  const resumen = { procesados: pendientes.length, confirmadas: 0, candidatas: 0, sinResultado: 0, errores: 0, omitidas: 0 };
   for (const r of resultados) {
     if (r?.error) resumen.errores += 1;
+    else if (r?.omitido) resumen.omitidas += 1;
     else if (r?.confirmado) resumen.confirmadas += 1;
-    else if (r?.encontrado) resumen.revisar += 1;
-    else resumen.sinImagen += 1;
+    else if (r?.encontrado) resumen.candidatas += 1;
+    else resumen.sinResultado += 1;
   }
   return resumen;
 }

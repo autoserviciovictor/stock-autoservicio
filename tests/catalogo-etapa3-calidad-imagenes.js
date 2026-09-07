@@ -4,7 +4,7 @@ const img=fs.readFileSync("catalogo-imagenes.js","utf8");
 const html=fs.readFileSync("index.html","utf8");
 const css=fs.readFileSync("catalogo-admin.css","utf8");
 assert(img.includes("producto fondo blanco solo producto packshot"));
-assert(img.includes('estado: "revisar"'));
+assert(img.includes("ESTADOS_IMAGEN.CANDIDATO"));
 assert(!img.includes('estado: "confirmada",\n      candidatoUrl'));
 assert(html.includes("fondo blanco, solo el producto"));
 assert(html.includes("Formato del catálogo: cuadrado 1:1"));

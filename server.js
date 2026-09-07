@@ -74,7 +74,6 @@ const {
   actualizarVisibilidadProductoCatalogoAdminDb,
   confirmarCandidatoImagenCatalogoDb,
   obtenerImagenCatalogoDb,
-  guardarImagenManualCatalogoDb,
   quitarImagenCatalogoDb,
   sincronizarRubrosImportadosCatalogoDb,
 } = require("./db-catalogo-publico");
