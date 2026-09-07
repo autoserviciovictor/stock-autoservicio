@@ -53,7 +53,7 @@ function puntuarCandidato(producto, candidato, calidad = {}) {
 
   let total = preliminar * 0.34 + texto * 0.26 + presentacion * 0.12 + calidadScore * 0.28;
   if (exacto) total += 18;
-  if (candidato?.proveedor === 'open_food_facts' || candidato?.proveedor === 'open_products_facts') total += exacto ? 7 : 2;
+  if (['open_food_facts','open_beauty_facts','open_pet_food_facts','open_products_facts'].includes(candidato?.proveedor)) total += exacto ? 7 : 2;
   if (calidad?.fondoBlanco) total += 4;
   total = Math.max(0, Math.min(100, Math.round(total)));
 

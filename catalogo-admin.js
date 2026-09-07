@@ -323,6 +323,7 @@ function renderProcesoImagenes(proceso = {}) {
   const stats = $("catalogImagenesProcesoStats");
   const iniciar = $("catalogBtnBuscarImagenes");
   const pausar = $("catalogBtnPausarImagenes");
+  const reiniciar = $("catalogBtnReiniciarImagenes");
   if (!panel) return;
 
   const estadoProceso = proceso.estado || "idle";
@@ -335,6 +336,7 @@ function renderProcesoImagenes(proceso = {}) {
   if (texto) texto.textContent = estadoProceso === "running" ? `${numero(procesados)} de ${numero(total)} productos procesados (${pct}%).` : (proceso.mensaje || "Listo para completar las imágenes faltantes.");
   if (stats) stats.textContent = `Asignadas ${numero(proceso.confirmadas)} · Revisar ${numero(proceso.revisar)} · Sin resultado ${numero(proceso.sinResultado)} · Errores ${numero(proceso.errores)} · Omitidas ${numero(proceso.omitidas)}`;
   if (pausar) pausar.classList.toggle("oculto", estadoProceso !== "running");
+  if (reiniciar) reiniciar.classList.toggle("oculto", estadoProceso !== "paused");
   if (iniciar) {
     const span = iniciar.querySelector("span");
     iniciar.disabled = estadoProceso === "running";
@@ -385,6 +387,23 @@ async function pausarImagenes() {
     clearTimeout(estado.procesoImagenesTimer);
     mensaje("Proceso de imágenes pausado.", "ok");
   } catch (e) { mensaje(e.message); }
+}
+
+async function reiniciarImagenesGratis() {
+  const boton = $("catalogBtnReiniciarImagenes");
+  if (!boton || boton.disabled) return;
+  boton.disabled = true;
+  try {
+    const data = await api("/admin/catalogo/imagenes/proceso/iniciar", { method: "POST", body: JSON.stringify({ reanudar: false }) });
+    renderProcesoImagenes(data.proceso || {});
+    mensaje("Búsqueda gratuita reiniciada desde el primer producto pendiente. Se volverán a intentar los productos sin imagen.", "ok");
+    clearTimeout(estado.procesoImagenesTimer);
+    estado.procesoImagenesTimer = setTimeout(() => cargarProcesoImagenes({ refrescarCatalogo: true }), 2000);
+  } catch (e) {
+    mensaje(e.message);
+  } finally {
+    boton.disabled = false;
+  }
 }
 
 async function abrirProducto(codigo) {
@@ -497,6 +516,7 @@ function bind() {
   $("catalogFiltroImagen")?.addEventListener("change", () => cargarProductos({ conservarPagina: false }).catch((e) => mensaje(e.message)));
   $("catalogBtnBuscarImagenes")?.addEventListener("click", iniciarProcesoImagenesMasivo);
   $("catalogBtnPausarImagenes")?.addEventListener("click", pausarImagenes);
+  $("catalogBtnReiniciarImagenes")?.addEventListener("click", reiniciarImagenesGratis);
   $("catalogBtnRecargar")?.addEventListener("click", () => Promise.all([cargarEstado(), cargarRubros(), cargarProductos()]).catch((e) => mensaje(e.message)));
   $("catalogBtnVerPublico")?.addEventListener("click", () => window.open(new URL("./catalogo/", location.href).href, "_blank", "noopener"));
   $("catalogBtnNuevoRubro")?.addEventListener("click", () => abrirRubro());

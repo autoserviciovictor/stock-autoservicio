@@ -233,9 +233,7 @@ async function buscarImagenProducto(codigo, { guardar = true, confirmarAutomatic
   try {
     const busqueda = await buscarCandidatosMultiples(producto);
     if (!busqueda.candidatos.length) {
-      const mensaje = busqueda.braveConfigurado
-        ? "No se encontraron candidatos de imagen para este producto."
-        : "No se encontraron candidatos por EAN. La búsqueda ampliada requiere BRAVE_SEARCH_API_KEY.";
+      const mensaje = "No se encontraron candidatos en las fuentes gratuitas disponibles para este producto.";
       await guardarResultadoImagenCatalogoDb(producto.codigo, {
         estado: ESTADOS_IMAGEN.SIN_RESULTADO,
         candidatoUrl: "",

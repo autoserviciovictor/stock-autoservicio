@@ -2,6 +2,9 @@ const crypto = require("crypto");
 
 const OFF_TIMEOUT_MS = 6500;
 const BRAVE_TIMEOUT_MS = 7000;
+const SEARCHALICIOUS_TIMEOUT_MS = 7000;
+const LEGACY_SEARCH_TIMEOUT_MS = 7000;
+const MAX_RESULTADOS_GRATUITOS_TEXTO = 12;
 const MAX_CANDIDATOS = 24;
 const MAX_RESULTADOS_BRAVE = 30;
 
@@ -144,16 +147,122 @@ async function buscarEnOpenFacts(producto) {
   const ean = codigoEAN(producto.codigo);
   if (!ean) return { candidatos: [], fuentes: [], consultas: [] };
   const fields = "code,product_name,brands,quantity,image_front_url,image_url,image_front_small_url";
+  // Las cuatro bases Open Facts usan la misma API y no requieren una clave paga.
+  // Consultamos por EAN exacto para minimizar falsos positivos.
   const fuentes = [
     { proveedor: "open_food_facts", fuente: "Open Food Facts", url: `https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(ean)}.json?fields=${fields}` },
+    { proveedor: "open_beauty_facts", fuente: "Open Beauty Facts", url: `https://world.openbeautyfacts.org/api/v2/product/${encodeURIComponent(ean)}.json?fields=${fields}` },
+    { proveedor: "open_pet_food_facts", fuente: "Open Pet Food Facts", url: `https://world.openpetfoodfacts.org/api/v2/product/${encodeURIComponent(ean)}.json?fields=${fields}` },
     { proveedor: "open_products_facts", fuente: "Open Products Facts", url: `https://world.openproductsfacts.org/api/v2/product/${encodeURIComponent(ean)}.json?fields=${fields}` },
   ];
   const candidatos = [];
+  const fuentesConResultado = [];
   for (const f of fuentes) {
     const data = await fetchJson(f.url, OFF_TIMEOUT_MS);
-    candidatos.push(...candidatosOpenFacts(data, f.proveedor, f.fuente, ean, producto));
+    const hallados = candidatosOpenFacts(data, f.proveedor, f.fuente, ean, producto);
+    if (hallados.length) fuentesConResultado.push(f.fuente);
+    candidatos.push(...hallados);
   }
-  return { candidatos, fuentes: fuentes.map((f) => f.fuente), consultas: [ean] };
+  return { candidatos, fuentes: fuentesConResultado, consultas: [ean] };
+}
+
+function consultaTextoGratis(producto) {
+  return texto([producto.marca, producto.nombre, producto.presentacion].filter(Boolean).join(" "), 300);
+}
+
+function productosDeRespuestaBusqueda(data) {
+  if (!data || typeof data !== "object") return [];
+  if (Array.isArray(data.products)) return data.products;
+  if (Array.isArray(data.results)) return data.results;
+  if (Array.isArray(data.documents)) return data.documents;
+  if (Array.isArray(data.hits)) return data.hits.map((h) => h?._source || h?.document || h).filter(Boolean);
+  if (Array.isArray(data?.hits?.hits)) return data.hits.hits.map((h) => h?._source || h?.document || h).filter(Boolean);
+  return [];
+}
+
+function candidatosBusquedaTexto(items, proveedor, fuente, consulta, producto, base = 54) {
+  return items.flatMap((item, indice) => {
+    const p = item?._source || item?.document || item || {};
+    const urls = [p.image_front_url, p.image_url, p.image_front_small_url].map(urlHttps).filter(Boolean);
+    return [...new Set(urls)].map((url, imageIndex) => ({
+      url,
+      proveedor,
+      fuente,
+      titulo: texto(p.product_name || p.product_name_es || p.product_name_en || producto.nombre),
+      marca: texto(p.brands || producto.marca, 120),
+      presentacion: texto(p.quantity || producto.presentacion, 120),
+      consulta,
+      exactaEAN: false,
+      tipoCoincidencia: "texto_gratuito",
+      puntajePreliminar: Math.max(38, base - Math.min(12, indice) - imageIndex * 2),
+    }));
+  });
+}
+
+async function buscarEnSearchALicious(producto) {
+  const consulta = consultaTextoGratis(producto);
+  if (!consulta) return { candidatos: [], fuentes: [], consultas: [] };
+  const params = new URLSearchParams({
+    q: consulta,
+    langs: "es,en",
+    page_size: String(MAX_RESULTADOS_GRATUITOS_TEXTO),
+    page: "1",
+  });
+  const data = await fetchJson(`https://search.openfoodfacts.org/search?${params}`, SEARCHALICIOUS_TIMEOUT_MS);
+  const items = productosDeRespuestaBusqueda(data);
+  const candidatos = candidatosBusquedaTexto(items, "open_food_facts_search", "Open Food Facts · búsqueda gratuita", consulta, producto, 58);
+  return {
+    candidatos,
+    fuentes: candidatos.length ? ["Open Food Facts · búsqueda gratuita"] : [],
+    consultas: [consulta],
+  };
+}
+
+async function buscarEnOpenFoodFactsLegacy(producto) {
+  const consulta = consultaTextoGratis(producto);
+  if (!consulta) return { candidatos: [], fuentes: [], consultas: [] };
+  const params = new URLSearchParams({
+    search_terms: consulta,
+    search_simple: "1",
+    action: "process",
+    json: "1",
+    page_size: String(MAX_RESULTADOS_GRATUITOS_TEXTO),
+    fields: "code,product_name,brands,quantity,image_front_url,image_url,image_front_small_url",
+  });
+  const data = await fetchJson(`https://world.openfoodfacts.org/cgi/search.pl?${params}`, LEGACY_SEARCH_TIMEOUT_MS);
+  const items = productosDeRespuestaBusqueda(data);
+  const candidatos = candidatosBusquedaTexto(items, "open_food_facts_legacy", "Open Food Facts · búsqueda alternativa", consulta, producto, 52);
+  return {
+    candidatos,
+    fuentes: candidatos.length ? ["Open Food Facts · búsqueda alternativa"] : [],
+    consultas: [consulta],
+  };
+}
+
+async function buscarFuentesGratuitas(producto) {
+  const exactas = await buscarEnOpenFacts(producto);
+  if (exactas.candidatos.length) return { ...exactas, modo: "ean_exacto" };
+
+  const textoPrincipal = await buscarEnSearchALicious(producto);
+  if (textoPrincipal.candidatos.length) {
+    return {
+      candidatos: textoPrincipal.candidatos,
+      fuentes: [...new Set([...exactas.fuentes, ...textoPrincipal.fuentes])],
+      consultas: [...new Set([...exactas.consultas, ...textoPrincipal.consultas])],
+      modo: "texto_gratuito",
+    };
+  }
+
+  // Search-a-licious sigue evolucionando. Si temporalmente no responde o no
+  // devuelve resultados, usamos el buscador histórico de Open Food Facts como
+  // respaldo gratuito, con una sola consulta adicional.
+  const alterna = await buscarEnOpenFoodFactsLegacy(producto);
+  return {
+    candidatos: alterna.candidatos,
+    fuentes: [...new Set([...exactas.fuentes, ...textoPrincipal.fuentes, ...alterna.fuentes])],
+    consultas: [...new Set([...exactas.consultas, ...textoPrincipal.consultas, ...alterna.consultas])],
+    modo: alterna.candidatos.length ? "texto_gratuito_alternativo" : "sin_resultado",
+  };
 }
 
 function consultasBrave(producto) {
@@ -229,16 +338,22 @@ async function buscarEnBrave(producto) {
 }
 
 async function buscarCandidatosMultiples(producto) {
-  const open = await buscarEnOpenFacts(producto);
-  const brave = await buscarEnBrave(producto);
-  const candidatos = deduplicarYOrdenar([...open.candidatos, ...brave.candidatos], producto);
+  // Estrategia gratuita primero. Brave queda únicamente como respaldo opcional
+  // y jamás es requisito para completar el catálogo.
+  const gratis = await buscarFuentesGratuitas(producto);
+  let brave = { candidatos: [], fuentes: [], consultas: [], configurado: false };
+  if (!gratis.candidatos.length && process.env.BRAVE_SEARCH_API_KEY) {
+    brave = await buscarEnBrave(producto);
+  }
+  const candidatos = deduplicarYOrdenar([...gratis.candidatos, ...brave.candidatos], producto);
   return {
     candidatos,
     cantidad: candidatos.length,
-    fuentes: [...new Set([...open.fuentes, ...brave.fuentes])],
-    consultas: [...new Set([...open.consultas, ...brave.consultas])],
+    fuentes: [...new Set([...gratis.fuentes, ...brave.fuentes])],
+    consultas: [...new Set([...gratis.consultas, ...brave.consultas])],
+    modoGratis: gratis.modo,
     braveConfigurado: brave.configurado,
-    requiereConfiguracion: !brave.configurado && candidatos.length === 0,
+    requiereConfiguracion: false,
   };
 }
 
@@ -248,4 +363,7 @@ module.exports = {
   urlHttps,
   deduplicarYOrdenar,
   consultasBrave,
+  consultaTextoGratis,
+  productosDeRespuestaBusqueda,
+  buscarFuentesGratuitas,
 };
