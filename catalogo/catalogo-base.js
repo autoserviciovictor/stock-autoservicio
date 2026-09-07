@@ -20,6 +20,8 @@ const state = {
   timersCantidad: new Map(),
   checkoutPaso: 1,
   checkout: cargarCheckout(),
+  pedidoRegistrado: null,
+  enviandoPedido: false,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -81,6 +83,8 @@ const els = {
   checkoutReviewProductosCantidad: $("checkoutReviewProductosCantidad"),
   checkoutReviewProductos: $("checkoutReviewProductos"),
   checkoutReviewTotal: $("checkoutReviewTotal"),
+  checkoutOrderConfirmation: $("checkoutOrderConfirmation"),
+  checkoutOrderNumber: $("checkoutOrderNumber"),
 };
 
 function escapeHtml(value = "") {
@@ -254,6 +258,7 @@ function tomarPaso1() {
     els.checkoutTelefono?.focus();
     return false;
   }
+  state.pedidoRegistrado = null;
   state.checkout = { ...state.checkout, nombre, telefono };
   guardarCheckout();
   mensajeCheckout(els.checkoutMensajePaso1, "");
@@ -289,6 +294,7 @@ function tomarPaso2() {
     return false;
   }
 
+  state.pedidoRegistrado = null;
   state.checkout = { ...state.checkout, entrega, direccion: entrega === "delivery" ? direccion : "", referencia: entrega === "delivery" ? referencia : "", horario: entrega === "delivery" ? horario : "", pago };
   guardarCheckout();
   mensajeCheckout(els.checkoutMensajePaso2, "");
@@ -316,11 +322,59 @@ function renderCheckoutReview() {
     </div>`).join("");
 }
 
+function obtenerClientTokenPedido() {
+  let token = String(state.checkout?.clientToken || "");
+  if (!/^[a-zA-Z0-9_-]{12,100}$/.test(token)) {
+    if (globalThis.crypto?.randomUUID) token = globalThis.crypto.randomUUID().replaceAll("-", "");
+    else token = `cat_${Date.now()}_${Math.random().toString(36).slice(2, 14)}`;
+    state.checkout = { ...state.checkout, clientToken: token };
+    guardarCheckout();
+  }
+  return token;
+}
+
+function payloadPedidoCatalogo() {
+  const c = state.checkout || {};
+  return {
+    clientToken: obtenerClientTokenPedido(),
+    nombre: c.nombre || "",
+    telefono: c.telefono || "",
+    entrega: c.entrega || "delivery",
+    direccion: c.direccion || "",
+    referencia: c.referencia || "",
+    horario: c.horario || "",
+    pago: c.pago || "",
+    items: state.carrito.map((item) => ({
+      codigo: item.codigo,
+      cantidad: Number(item.cantidad) || 0,
+    })),
+  };
+}
+
+async function registrarPedidoCatalogo() {
+  if (state.pedidoRegistrado?.numero) return state.pedidoRegistrado;
+  const respuesta = await fetch(`${API_BASE_URL}/catalogo/api/pedidos`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payloadPedidoCatalogo()),
+  });
+  const data = await respuesta.json().catch(() => ({}));
+  if (!respuesta.ok || !data?.ok || !data?.pedido?.numero) {
+    throw new Error(data?.mensaje || "No se pudo registrar el pedido");
+  }
+  state.pedidoRegistrado = data.pedido;
+  if (els.checkoutOrderNumber) els.checkoutOrderNumber.textContent = data.pedido.numero;
+  if (els.checkoutOrderConfirmation) els.checkoutOrderConfirmation.hidden = false;
+  return data.pedido;
+}
+
 function generarMensajePedido() {
   const c = state.checkout || {};
   const totals = cartTotals();
   const lineas = [
-    `*PEDIDO - ${CATALOGO_PEDIDO_CONFIG.negocio}*`, "",
+    `*PEDIDO - ${CATALOGO_PEDIDO_CONFIG.negocio}*`,
+    state.pedidoRegistrado?.numero ? `*N.º de pedido:* ${state.pedidoRegistrado.numero}` : "",
+    "",
     `*Cliente:* ${c.nombre || "-"}`,
     `*Teléfono:* ${c.telefono || "-"}`, "",
     "*Productos:*",
@@ -345,18 +399,48 @@ async function copiarPedido() {
   }
 }
 
-function enviarPedidoWhatsApp() {
+async function enviarPedidoWhatsApp() {
+  if (state.enviandoPedido) return;
   const numero = telefonoWhatsappConfigurado();
   if (!numero) {
-    mensajeCheckout(els.checkoutMensajePaso3, "Falta configurar el número de WhatsApp del autoservicio. Podés copiar el pedido mientras tanto.", "error");
+    mensajeCheckout(els.checkoutMensajePaso3, "Falta configurar el número de WhatsApp del autoservicio.", "error");
     return;
   }
-  window.open(`https://wa.me/${numero}?text=${encodeURIComponent(generarMensajePedido())}`, "_blank", "noopener,noreferrer");
+
+  state.enviandoPedido = true;
+  if (els.checkoutEnviarWhatsapp) {
+    els.checkoutEnviarWhatsapp.disabled = true;
+    els.checkoutEnviarWhatsapp.textContent = "Registrando pedido...";
+  }
+  mensajeCheckout(els.checkoutMensajePaso3, "");
+
+  try {
+    const pedido = await registrarPedidoCatalogo();
+    mensajeCheckout(els.checkoutMensajePaso3, `Pedido ${pedido.numero} registrado correctamente. Abriendo WhatsApp...`, "ok");
+
+    const url = `https://wa.me/${numero}?text=${encodeURIComponent(generarMensajePedido())}`;
+    window.open(url, "_blank", "noopener,noreferrer");
+
+    fetch(`${API_BASE_URL}/catalogo/api/pedidos/${encodeURIComponent(pedido.numero)}/whatsapp-abierto`, {
+      method: "POST",
+      keepalive: true,
+    }).catch(() => {});
+  } catch (error) {
+    mensajeCheckout(els.checkoutMensajePaso3, error?.message || "No se pudo registrar el pedido. No se abrió WhatsApp.", "error");
+  } finally {
+    state.enviandoPedido = false;
+    if (els.checkoutEnviarWhatsapp) {
+      els.checkoutEnviarWhatsapp.disabled = false;
+      els.checkoutEnviarWhatsapp.innerHTML = '<span aria-hidden="true">◉</span> Enviar pedido por WhatsApp';
+    }
+  }
 }
 
 function abrirCheckout() {
   if (!state.carrito.length) return;
   cerrarDrawers();
+  state.pedidoRegistrado = null;
+  if (els.checkoutOrderConfirmation) els.checkoutOrderConfirmation.hidden = true;
   cargarCheckoutEnFormulario();
   setCheckoutPaso(1);
   els.checkout.classList.add("is-open");
@@ -608,6 +692,7 @@ function buscar(texto = "") {
 function buscarProducto(codigo) { return state.productos.find((p) => p.codigo === codigo) || state.carrito.find((p) => p.codigo === codigo); }
 
 function agregarPrimeraUnidad(codigo) {
+  state.pedidoRegistrado = null;
   const producto = buscarProducto(codigo);
   if (!producto) return;
 
@@ -633,6 +718,7 @@ function agregarPrimeraUnidad(codigo) {
 }
 
 function modificarCantidadProducto(codigo, delta) {
+  state.pedidoRegistrado = null;
   const item = state.carrito.find((x) => x.codigo === codigo);
   if (!item) return;
 
@@ -660,6 +746,7 @@ function modificarCantidadProducto(codigo, delta) {
 }
 
 function actualizarCantidadCarrito(codigo, delta) {
+  state.pedidoRegistrado = null;
   const item = state.carrito.find((x) => x.codigo === codigo);
   if (!item) return;
   item.cantidad = Math.max(1, Math.min(999, item.cantidad + delta));
@@ -669,6 +756,7 @@ function actualizarCantidadCarrito(codigo, delta) {
 }
 
 function quitarDelCarrito(codigo) {
+  state.pedidoRegistrado = null;
   cancelarTimerCantidad(codigo);
   state.editoresCantidad.delete(codigo);
   state.carrito = state.carrito.filter((x) => x.codigo !== codigo);

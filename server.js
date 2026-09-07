@@ -78,6 +78,12 @@ const {
   quitarImagenCatalogoDb,
   sincronizarRubrosImportadosCatalogoDb,
 } = require("./db-catalogo-publico");
+const {
+  asegurarEsquemaCatalogoPedidos,
+  crearPedidoCatalogoDb,
+  marcarWhatsappAbiertoPedidoDb,
+  listarPedidosCatalogoDb,
+} = require("./db-catalogo-pedidos");
 const { buscarImagenProducto, obtenerImagenNormalizadaProducto, importarImagenManual } = require("./catalogo-imagenes");
 const {
   iniciarProcesoImagenes,
@@ -1058,6 +1064,50 @@ app.get("/catalogo/api/productos/:codigo/imagen", async (req, res) => {
   } catch (error) {
     console.error("Error sirviendo imagen pública del catálogo:", error);
     res.status(404).end();
+  }
+});
+
+
+const PEDIDO_PUBLICO_WINDOW_MS = 60 * 1000;
+const PEDIDO_PUBLICO_MAX = 12;
+const pedidosPublicosPorIp = new Map();
+
+function limitarPedidosCatalogo(req, res, next) {
+  const ahora = Date.now();
+  const clave = req.ip || req.socket?.remoteAddress || "ip";
+  const actual = pedidosPublicosPorIp.get(clave);
+  const estado = !actual || ahora - actual.inicio >= PEDIDO_PUBLICO_WINDOW_MS
+    ? { inicio: ahora, cantidad: 0 }
+    : actual;
+  if (estado.cantidad >= PEDIDO_PUBLICO_MAX) {
+    return res.status(429).json({ ok: false, mensaje: "Demasiados pedidos en poco tiempo. Esperá un minuto y volvé a intentar." });
+  }
+  estado.cantidad += 1;
+  pedidosPublicosPorIp.set(clave, estado);
+  next();
+}
+
+app.post("/catalogo/api/pedidos", limitarPedidosCatalogo, async (req, res) => {
+  res.set("Cache-Control", "no-store");
+  try {
+    const pedido = await crearPedidoCatalogoDb(req.body || {});
+    res.status(pedido.existente ? 200 : 201).json({ ok: true, pedido });
+  } catch (error) {
+    console.error("Error guardando pedido del catálogo:", error);
+    res.status(Number(error?.status) || 500).json({
+      ok: false,
+      mensaje: Number(error?.status) ? error.message : "No se pudo registrar el pedido",
+    });
+  }
+});
+
+app.post("/catalogo/api/pedidos/:numero/whatsapp-abierto", async (req, res) => {
+  res.set("Cache-Control", "no-store");
+  try {
+    await marcarWhatsappAbiertoPedidoDb(req.params.numero);
+    res.json({ ok: true });
+  } catch {
+    res.json({ ok: true });
   }
 });
 
