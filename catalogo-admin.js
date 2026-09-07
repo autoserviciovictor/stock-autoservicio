@@ -67,6 +67,7 @@ async function cargarRubros() {
   estado.rubros = data.rubros || [];
   poblarSelectRubros();
   renderRubros();
+  actualizarBotonesPublicacionMasiva();
 }
 
 function poblarSelectRubros() {
@@ -406,6 +407,67 @@ async function reiniciarImagenesGratis() {
   }
 }
 
+function alcancePublicacionMasiva() {
+  const valor = $("catalogFiltroRubro")?.value || "todos";
+  if (valor === "sin-rubro") return { rubroId: null, nombre: "productos sin rubro", sinRubro: true };
+  if (valor === "todos") return { rubroId: null, nombre: "todo el catálogo", sinRubro: false };
+  const rubro = estado.rubros.find((r) => String(r.id) === String(valor));
+  return { rubroId: Number(valor), nombre: rubro?.nombre || "este rubro", sinRubro: false };
+}
+
+function actualizarBotonesPublicacionMasiva() {
+  const alcance = alcancePublicacionMasiva();
+  const publicar = $("catalogBtnPublicarMasivo");
+  const ocultar = $("catalogBtnOcultarMasivo");
+  if (publicar) {
+    publicar.disabled = alcance.sinRubro;
+    publicar.title = alcance.sinRubro ? "Asigná un rubro antes de publicar estos productos" : `Publicar ${alcance.nombre}`;
+    const span = publicar.querySelector("span");
+    if (span) span.textContent = alcance.rubroId ? "Publicar rubro" : "Publicar todos";
+  }
+  if (ocultar) {
+    ocultar.title = `Ocultar ${alcance.nombre}`;
+    const span = ocultar.querySelector("span");
+    if (span) span.textContent = alcance.rubroId ? "Ocultar rubro" : "Ocultar todos";
+  }
+}
+
+async function cambiarVisibilidadMasiva(visible) {
+  const alcance = alcancePublicacionMasiva();
+  if (visible && alcance.sinRubro) {
+    mensaje("Los productos sin rubro no se pueden publicar. Asignales un rubro primero.");
+    return;
+  }
+  const accion = visible ? "publicar" : "ocultar";
+  const confirmar = await window.AutoservicioDialog?.confirm?.({
+    title: visible ? "Publicar productos" : "Ocultar productos",
+    message: `¿Querés ${accion} ${alcance.nombre}? Esta acción afecta a todos los productos de ese alcance, no solo a la página visible.`,
+    confirmarTexto: visible ? "Publicar" : "Ocultar",
+    cancelarTexto: "Cancelar",
+    danger: !visible,
+  });
+  if (!confirmar) return;
+
+  const publicar = $("catalogBtnPublicarMasivo");
+  const ocultar = $("catalogBtnOcultarMasivo");
+  if (publicar) publicar.disabled = true;
+  if (ocultar) ocultar.disabled = true;
+  try {
+    const data = await api("/admin/catalogo/productos/visibilidad-masiva", {
+      method: "POST",
+      body: JSON.stringify({ visible, rubroId: alcance.rubroId }),
+    });
+    await Promise.all([cargarEstado(), cargarRubros(), cargarProductos({ conservarPagina: false })]);
+    const omitidos = Number(data.omitidosSinRubro) || 0;
+    const detalle = omitidos ? ` Se omitieron ${numero(omitidos)} productos sin rubro.` : "";
+    mensaje(`${numero(data.actualizados)} productos ${visible ? "publicados" : "ocultados"}.${detalle}`, "ok");
+  } catch (e) {
+    mensaje(e.message);
+  } finally {
+    actualizarBotonesPublicacionMasiva();
+  }
+}
+
 async function abrirProducto(codigo) {
   try {
     const data = await api(`/admin/catalogo/productos/${encodeURIComponent(codigo)}`);
@@ -511,9 +573,14 @@ function bind() {
   document.body.dataset.catalogAdminBound = "1";
   document.querySelectorAll("[data-catalog-tab]").forEach((b) => b.addEventListener("click", () => cambiarTab(b.dataset.catalogTab)));
   $("catalogBuscarProductos")?.addEventListener("input", () => { clearTimeout(estado.busquedaTimer); estado.busquedaTimer = setTimeout(() => cargarProductos({ conservarPagina: false }).catch((e) => mensaje(e.message)), 260); });
-  $("catalogFiltroRubro")?.addEventListener("change", () => cargarProductos({ conservarPagina: false }).catch((e) => mensaje(e.message)));
+  $("catalogFiltroRubro")?.addEventListener("change", () => {
+    actualizarBotonesPublicacionMasiva();
+    cargarProductos({ conservarPagina: false }).catch((e) => mensaje(e.message));
+  });
   $("catalogFiltroEstado")?.addEventListener("change", () => cargarProductos({ conservarPagina: false }).catch((e) => mensaje(e.message)));
   $("catalogFiltroImagen")?.addEventListener("change", () => cargarProductos({ conservarPagina: false }).catch((e) => mensaje(e.message)));
+  $("catalogBtnPublicarMasivo")?.addEventListener("click", () => cambiarVisibilidadMasiva(true));
+  $("catalogBtnOcultarMasivo")?.addEventListener("click", () => cambiarVisibilidadMasiva(false));
   $("catalogBtnBuscarImagenes")?.addEventListener("click", iniciarProcesoImagenesMasivo);
   $("catalogBtnPausarImagenes")?.addEventListener("click", pausarImagenes);
   $("catalogBtnReiniciarImagenes")?.addEventListener("click", reiniciarImagenesGratis);

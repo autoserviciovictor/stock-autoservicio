@@ -172,3 +172,46 @@ body.drawer-open { overflow: hidden; }
   .catalogo-container { width: calc(100% - 20px); }.quick-categories { margin-inline: -2px; }
   .product-card { grid-template-columns: 86px minmax(0,1fr); gap: 9px; }.product-card__actions { grid-template-columns: 82px 1fr; gap: 6px; }.qty-control { grid-template-columns: 26px 1fr 26px; }.add-button { font-size: 10px; }
 }
+
+
+/* Etapa 4.1 — mejor aprovechamiento de escritorio + placeholder estable */
+@media (min-width: 1200px) {
+  .catalogo-container,
+  .catalogo-header__inner { width: min(1460px, calc(100% - 48px)); }
+  .catalogo-products-layout { grid-template-columns: 220px minmax(0, 1fr); gap: 30px; }
+  .catalogo-grid { grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
+}
+.product-card__image > .product-card__placeholder {
+  position: absolute;
+  inset: 0;
+  width: auto;
+  height: auto;
+  border: 0;
+  border-radius: 12px;
+  background: linear-gradient(145deg,#fafafa,#f1f2f4);
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 8px;
+  color: #98a2b3;
+}
+.product-card__placeholder-box {
+  width: 52px;
+  height: 52px;
+  display: grid;
+  place-items: center;
+  border: 1px solid #dfe3e8;
+  border-radius: 14px;
+  background: #fff;
+  font-size: 20px;
+}
+.product-card__placeholder small {
+  font-size: 10px;
+  font-weight: 700;
+  color: #98a2b3;
+}
+.product-card__image > img {
+  position: relative;
+  z-index: 1;
+  background: #fff;
+}

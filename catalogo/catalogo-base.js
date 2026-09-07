@@ -92,9 +92,8 @@ function setCantidadTemporal(codigo, cantidad) { state.cantidades.set(codigo, Ma
 
 function imagenProducto(producto, clase = "") {
   const codigo = encodeURIComponent(producto.codigo);
-  const alt = escapeHtml(producto.nombre);
   const src = `${API_BASE_URL}/catalogo/api/productos/${codigo}/imagen`;
-  return `<img class="${clase}" src="${src}" alt="${alt}" loading="lazy" decoding="async" onerror="this.hidden=true;this.nextElementSibling.hidden=false"><span class="product-card__placeholder" hidden aria-hidden="true">□</span>`;
+  return `<span class="product-card__placeholder" aria-hidden="true"><span class="product-card__placeholder-box">▣</span><small>Sin imagen</small></span><img class="${clase}" src="${src}" alt="" loading="lazy" decoding="async" onload="this.previousElementSibling.hidden=true" onerror="this.remove()">`;
 }
 
 function renderSkeletons() {

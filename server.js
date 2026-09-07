@@ -72,6 +72,7 @@ const {
   obtenerProductoCatalogoAdminDb,
   actualizarProductoCatalogoAdminDb,
   actualizarVisibilidadProductoCatalogoAdminDb,
+  actualizarVisibilidadMasivaCatalogoAdminDb,
   confirmarCandidatoImagenCatalogoDb,
   obtenerImagenCatalogoDb,
   quitarImagenCatalogoDb,
@@ -1603,6 +1604,19 @@ app.patch("/admin/catalogo/productos/:codigo/visibilidad", requerirAdministrador
   } catch (error) {
     console.error("Error actualizando visibilidad del catálogo:", error);
     res.status(error.status || 400).json({ ok: false, mensaje: error.message || "No se pudo cambiar la visibilidad" });
+  }
+});
+
+app.post("/admin/catalogo/productos/visibilidad-masiva", requerirAdministrador, async (req, res) => {
+  try {
+    const resultado = await actualizarVisibilidadMasivaCatalogoAdminDb({
+      visible: req.body?.visible,
+      rubroId: req.body?.rubroId ?? null,
+    });
+    res.json({ ok: true, ...resultado });
+  } catch (error) {
+    console.error("Error actualizando visibilidad masiva del catálogo:", error);
+    res.status(error.status || 400).json({ ok: false, mensaje: error.message || "No se pudo actualizar la publicación masiva" });
   }
 });
 

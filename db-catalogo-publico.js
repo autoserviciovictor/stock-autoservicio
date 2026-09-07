@@ -726,6 +726,69 @@ async function actualizarVisibilidadProductoCatalogoAdminDb(codigo, visible) {
   return actualizarProductoCatalogoAdminDb(codigo, { visible });
 }
 
+async function actualizarVisibilidadMasivaCatalogoAdminDb({ visible, rubroId = null } = {}) {
+  await asegurarEsquemaCatalogoPublico();
+  const hacerVisible = booleano(visible, false);
+  let categoria = rubroId;
+  if (categoria === "" || categoria === undefined || categoria === null) categoria = null;
+  else {
+    categoria = Number(categoria);
+    if (!Number.isInteger(categoria) || categoria < 1) throw new Error("El rubro seleccionado no es válido");
+    const existe = await query(`SELECT 1 FROM catalog_categories WHERE category_id=$1 LIMIT 1`, [categoria]);
+    if (!existe.rowCount) throw new Error("El rubro seleccionado no existe");
+  }
+
+  const params = [];
+  let filtroRubro = "";
+  if (categoria !== null) {
+    params.push(categoria);
+    filtroRubro = ` AND s.category_id=$${params.length}`;
+  }
+
+  if (hacerVisible) {
+    const r = await query(`
+      UPDATE catalog_product_settings s
+      SET visible=TRUE, updated_at=NOW()
+      FROM product_catalog p
+      WHERE s.code=p.code
+        AND s.category_id IS NOT NULL
+        AND s.visible IS DISTINCT FROM TRUE
+        ${filtroRubro}
+      RETURNING s.code
+    `, params);
+    const sinRubro = categoria === null
+      ? await query(`
+          SELECT COUNT(*)::int AS total
+          FROM product_catalog p
+          LEFT JOIN catalog_product_settings s ON s.code=p.code
+          WHERE s.category_id IS NULL
+        `)
+      : { rows: [{ total: 0 }] };
+    return {
+      visible: true,
+      rubroId: categoria,
+      actualizados: r.rowCount,
+      omitidosSinRubro: Number(sinRubro.rows[0]?.total) || 0,
+    };
+  }
+
+  const r = await query(`
+    UPDATE catalog_product_settings s
+    SET visible=FALSE, updated_at=NOW()
+    FROM product_catalog p
+    WHERE s.code=p.code
+      AND s.visible IS DISTINCT FROM FALSE
+      ${filtroRubro}
+    RETURNING s.code
+  `, params);
+  return {
+    visible: false,
+    rubroId: categoria,
+    actualizados: r.rowCount,
+    omitidosSinRubro: 0,
+  };
+}
+
 async function guardarResultadoImagenCatalogoDb(codigo, datos = {}, opciones = {}) {
   await asegurarEsquemaCatalogoPublico();
   const code = textoLimitado(codigo, 160);
@@ -975,6 +1038,7 @@ module.exports = {
   obtenerProductoCatalogoAdminDb,
   actualizarProductoCatalogoAdminDb,
   actualizarVisibilidadProductoCatalogoAdminDb,
+  actualizarVisibilidadMasivaCatalogoAdminDb,
   guardarResultadoImagenCatalogoDb,
   confirmarCandidatoImagenCatalogoDb,
   obtenerImagenCatalogoDb,
