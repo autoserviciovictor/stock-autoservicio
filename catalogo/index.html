@@ -8,6 +8,13 @@
   <title>Catálogo online | Autoservicio Victor</title>
   <link rel="icon" href="../icons/favicon.png">
   <link rel="stylesheet" href="./catalogo-base.css?v=1960-d21-catalogo-etapa4-070926">
+  <link rel="stylesheet" href="./catalogo-etapa4-2.css?v=1960-d21-catalogo-etapa4-2-070926">
+  <link rel="stylesheet" href="./catalogo-etapa4-2-1.css?v=1960-d21-catalogo-etapa4-2-1-070926">
+  <link rel="stylesheet" href="./catalogo-etapa4-3.css?v=1960-d21-catalogo-etapa4-3-070926">
+  <link rel="stylesheet" href="./catalogo-etapa4-3-1.css?v=1960-d21-catalogo-etapa4-3-1-070926">
+  <link rel="stylesheet" href="./catalogo-etapa4-3-2.css?v=1960-d21-catalogo-etapa4-3-2-070926">
+  <link rel="stylesheet" href="./catalogo-etapa4-4.css?v=1960-d21-catalogo-etapa4-4-070926">
+  <link rel="stylesheet" href="./catalogo-etapa5.css?v=1960-d21-catalogo-etapa5-070926">
 </head>
 <body>
   <div class="catalogo-app" id="catalogoApp">
@@ -129,8 +136,91 @@
         <div><span id="catalogoCartProductsLabel">0 productos</span><strong>Total estimado</strong></div>
         <strong class="cart-summary__total" id="catalogoCartTotal">$ 0,00</strong>
       </div>
-      <button class="primary-button" id="catalogoCartContinue" type="button">Continuar comprando</button>
-      <p class="cart-summary__note">El envío del pedido por WhatsApp se incorporará en la siguiente etapa.</p>
+      <button class="primary-button" id="catalogoCartContinue" type="button">Continuar con el pedido</button>
+      <p class="cart-summary__note">Completá tus datos para preparar el pedido por WhatsApp.</p>
+    </aside>
+
+
+    <aside class="catalogo-checkout" id="catalogoCheckout" aria-hidden="true" aria-labelledby="catalogoCheckoutTitle">
+      <div class="drawer-header checkout-header">
+        <div><small>FINALIZAR PEDIDO</small><h2 id="catalogoCheckoutTitle">Tu pedido</h2></div>
+        <button class="icon-btn" id="catalogoCheckoutClose" type="button" aria-label="Cerrar pedido">×</button>
+      </div>
+
+      <div class="checkout-progress" aria-label="Progreso del pedido">
+        <span class="is-active" data-checkout-progress="1">1</span><i></i>
+        <span data-checkout-progress="2">2</span><i></i>
+        <span data-checkout-progress="3">3</span>
+      </div>
+
+      <div class="checkout-body">
+        <section class="checkout-step is-active" data-checkout-step="1">
+          <p class="catalogo-eyebrow">DATOS DEL CLIENTE</p>
+          <h3>¿Quién recibe el pedido?</h3>
+          <div class="checkout-fields">
+            <label class="checkout-field"><span>Nombre y apellido *</span><input id="checkoutNombre" type="text" autocomplete="name" maxlength="80" placeholder="Ej.: Juan Pérez"></label>
+            <label class="checkout-field"><span>Teléfono *</span><input id="checkoutTelefono" type="tel" autocomplete="tel" maxlength="30" placeholder="Ej.: 11 1234 5678"></label>
+          </div>
+          <div class="checkout-message" id="checkoutMensajePaso1" role="status"></div>
+          <div class="checkout-actions"><button class="primary-button" id="checkoutPaso1Siguiente" type="button">Continuar</button></div>
+        </section>
+
+        <section class="checkout-step" data-checkout-step="2">
+          <p class="catalogo-eyebrow">ENTREGA Y PAGO</p>
+          <h3>¿Cómo querés recibirlo?</h3>
+
+          <div class="checkout-choice-grid">
+            <label class="checkout-choice"><input type="radio" name="checkoutEntrega" value="delivery" checked><span><strong>Delivery</strong><small>Te llevamos el pedido.</small></span></label>
+            <label class="checkout-choice"><input type="radio" name="checkoutEntrega" value="retiro"><span><strong>Retiro</strong><small>Retirás por el autoservicio.</small></span></label>
+          </div>
+
+          <div id="checkoutDeliveryFields">
+            <div class="checkout-fields">
+              <label class="checkout-field checkout-field--wide"><span>Dirección *</span><input id="checkoutDireccion" type="text" autocomplete="street-address" maxlength="120" placeholder="Calle, número, barrio"></label>
+              <label class="checkout-field checkout-field--wide"><span>Referencia</span><input id="checkoutReferencia" type="text" maxlength="120" placeholder="Entre calles, color de casa, etc."></label>
+              <label class="checkout-field"><span>Horario preferido *</span><select id="checkoutHorario"></select></label>
+            </div>
+            <div class="checkout-notices">
+              <p id="checkoutMinimoNotice"></p>
+              <p>Sábados y domingos: si pedís de 09:00 a 12:00, entregamos tu pedido al mediodía.</p>
+              <p>Feriados sin delivery.</p>
+            </div>
+          </div>
+
+          <h3 class="checkout-subtitle">Forma de pago</h3>
+          <div class="checkout-payment-grid" id="checkoutPaymentGrid"></div>
+
+          <div class="checkout-message" id="checkoutMensajePaso2" role="status"></div>
+          <div class="checkout-actions checkout-actions--split">
+            <button class="secondary-button" id="checkoutPaso2Atras" type="button">Atrás</button>
+            <button class="primary-button" id="checkoutPaso2Siguiente" type="button">Revisar pedido</button>
+          </div>
+        </section>
+
+        <section class="checkout-step" data-checkout-step="3">
+          <p class="catalogo-eyebrow">REVISAR PEDIDO</p>
+          <h3>Confirmá que esté todo bien</h3>
+          <div class="checkout-review-card">
+            <div class="checkout-review-section"><span>Cliente</span><strong id="checkoutReviewCliente">—</strong><small id="checkoutReviewTelefono">—</small></div>
+            <div class="checkout-review-section"><span>Entrega</span><strong id="checkoutReviewEntrega">—</strong><small id="checkoutReviewDireccion">—</small></div>
+            <div class="checkout-review-section"><span>Pago</span><strong id="checkoutReviewPago">—</strong></div>
+          </div>
+
+          <div class="checkout-review-products">
+            <div class="checkout-review-products__head"><strong>Productos</strong><span id="checkoutReviewProductosCantidad"></span></div>
+            <div id="checkoutReviewProductos"></div>
+          </div>
+
+          <div class="checkout-review-total"><span>Total estimado</span><strong id="checkoutReviewTotal">$ 0,00</strong></div>
+          <div class="checkout-message" id="checkoutMensajePaso3" role="status"></div>
+
+          <div class="checkout-actions checkout-actions--split">
+            <button class="secondary-button" id="checkoutPaso3Atras" type="button">Atrás</button>
+            <button class="checkout-whatsapp-button" id="checkoutEnviarWhatsapp" type="button"><span aria-hidden="true">◉</span> Enviar pedido por WhatsApp</button>
+          </div>
+          <button class="checkout-copy-button" id="checkoutCopiarPedido" type="button">Copiar pedido</button>
+        </section>
+      </div>
     </aside>
 
     <button class="catalogo-mobile-cartbar" id="catalogoMobileCartbar" type="button" hidden>

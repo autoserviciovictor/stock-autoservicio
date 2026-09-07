@@ -14,7 +14,7 @@ assert(js.includes('/catalogo/api/productos?'), 'Debe consumir productos públic
 assert(js.includes('autoservicio-victor-catalogo-carrito-v1'), 'El carrito debe persistir localmente');
 assert(js.includes('localStorage.setItem'), 'El carrito debe guardarse entre recargas');
 assert(js.includes('PAGE_SIZE = 32'), 'Debe evitar cargar miles de productos de una sola vez');
-assert(js.includes('data-action="add"'), 'Las tarjetas deben poder agregar productos');
+assert(js.includes('data-action="add-first"'), 'Las tarjetas deben poder agregar productos');
 assert(css.includes('@media (max-width: 760px)'), 'Debe existir experiencia móvil dedicada');
 assert(css.includes('.catalogo-mobile-cartbar'), 'Debe existir barra móvil de carrito');
 assert(!html.includes('Estamos preparando tu nueva experiencia de compra'), 'Debe retirar la pantalla provisoria de Etapa 1');
