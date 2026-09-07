@@ -273,29 +273,113 @@ async function marcarWhatsappAbiertoPedidoDb(numero) {
   return r.rowCount > 0;
 }
 
-async function listarPedidosCatalogoDb({ limite = 100, estado = "" } = {}) {
+async function listarPedidosCatalogoDb({ pagina = 1, limite = 50, estado = "", busqueda = "" } = {}) {
   await asegurarEsquemaCatalogoPedidos();
-  const max = Math.max(1, Math.min(500, Number(limite) || 100));
+
+  const page = Math.max(1, Number(pagina) || 1);
+  const max = Math.max(1, Math.min(100, Number(limite) || 50));
+  const offset = (page - 1) * max;
   const e = texto(estado, 30);
+  const q = texto(busqueda, 120).toLowerCase();
+
   const params = [];
-  let where = "";
-  if (e && ESTADOS_PEDIDO.includes(e)) {
+  const where = [];
+
+  if (e && e !== "todos") {
+    if (!ESTADOS_PEDIDO.includes(e)) {
+      throw Object.assign(new Error("Estado de pedido inválido"), { status: 400 });
+    }
     params.push(e);
-    where = "WHERE o.status=$1";
+    where.push(`o.status=$${params.length}`);
   }
-  params.push(max);
-  const limParam = params.length;
+
+  if (q) {
+    params.push(`%${q}%`);
+    where.push(`(
+      LOWER(o.order_number) LIKE $${params.length}
+      OR LOWER(o.customer_name) LIKE $${params.length}
+      OR LOWER(o.customer_phone) LIKE $${params.length}
+      OR LOWER(o.delivery_address) LIKE $${params.length}
+    )`);
+  }
+
+  const sqlWhere = where.length ? `WHERE ${where.join(" AND ")}` : "";
+
+  const totalResult = await query(
+    `SELECT COUNT(*)::int AS total
+       FROM catalog_orders o
+       ${sqlWhere}`,
+    params,
+  );
+  const total = Number(totalResult.rows[0]?.total) || 0;
+
+  const listParams = [...params, max, offset];
+  const limiteParam = listParams.length - 1;
+  const offsetParam = listParams.length;
+
   const r = await query(
     `SELECT o.order_id,o.order_number,o.customer_name,o.customer_phone,o.delivery_type,
             o.delivery_address,o.delivery_reference,o.delivery_time,o.payment_method,o.status,
             o.total,o.item_units,o.item_lines,o.whatsapp_opened,o.created_at,o.updated_at
        FROM catalog_orders o
-       ${where}
+       ${sqlWhere}
       ORDER BY o.created_at DESC
-      LIMIT $${limParam}`,
-    params,
+      LIMIT $${limiteParam} OFFSET $${offsetParam}`,
+    listParams,
   );
-  return r.rows.map((f) => ({
+
+  return {
+    pagina: page,
+    limite: max,
+    total,
+    paginas: Math.max(1, Math.ceil(total / max)),
+    pedidos: r.rows.map((f) => ({
+      id: Number(f.order_id),
+      numero: String(f.order_number),
+      cliente: String(f.customer_name),
+      telefono: String(f.customer_phone),
+      entrega: String(f.delivery_type),
+      direccion: String(f.delivery_address),
+      referencia: String(f.delivery_reference),
+      horario: String(f.delivery_time),
+      pago: String(f.payment_method),
+      estado: String(f.status),
+      total: Number(f.total) || 0,
+      unidades: Number(f.item_units) || 0,
+      productos: Number(f.item_lines) || 0,
+      whatsappAbierto: Boolean(f.whatsapp_opened),
+      creadoEn: f.created_at,
+      actualizadoEn: f.updated_at,
+    })),
+  };
+}
+
+async function obtenerPedidoCatalogoAdminDb(numero) {
+  await asegurarEsquemaCatalogoPedidos();
+  const n = texto(numero, 40);
+  if (!n) return null;
+
+  const cab = await query(
+    `SELECT o.order_id,o.order_number,o.customer_name,o.customer_phone,o.delivery_type,
+            o.delivery_address,o.delivery_reference,o.delivery_time,o.payment_method,o.status,
+            o.total,o.item_units,o.item_lines,o.whatsapp_opened,o.created_at,o.updated_at
+       FROM catalog_orders o
+      WHERE o.order_number=$1
+      LIMIT 1`,
+    [n],
+  );
+  if (!cab.rowCount) return null;
+
+  const f = cab.rows[0];
+  const items = await query(
+    `SELECT code,article,quantity,unit_price,line_total,sale_unit
+       FROM catalog_order_items
+      WHERE order_id=$1
+      ORDER BY order_item_id`,
+    [f.order_id],
+  );
+
+  return {
     id: Number(f.order_id),
     numero: String(f.order_number),
     cliente: String(f.customer_name),
@@ -312,7 +396,64 @@ async function listarPedidosCatalogoDb({ limite = 100, estado = "" } = {}) {
     whatsappAbierto: Boolean(f.whatsapp_opened),
     creadoEn: f.created_at,
     actualizadoEn: f.updated_at,
-  }));
+    items: items.rows.map((i) => ({
+      codigo: String(i.code),
+      nombre: String(i.article),
+      cantidad: Number(i.quantity) || 0,
+      precio: Number(i.unit_price) || 0,
+      total: Number(i.line_total) || 0,
+      unidadVenta: String(i.sale_unit || "unidad"),
+    })),
+  };
+}
+
+async function actualizarEstadoPedidoCatalogoDb(numero, estado) {
+  await asegurarEsquemaCatalogoPedidos();
+  const n = texto(numero, 40);
+  const e = texto(estado, 30).toLowerCase();
+  if (!n) throw Object.assign(new Error("Pedido inválido"), { status: 400 });
+  if (!ESTADOS_PEDIDO.includes(e)) {
+    throw Object.assign(new Error("Estado de pedido inválido"), { status: 400 });
+  }
+
+  const r = await query(
+    `UPDATE catalog_orders
+        SET status=$2, updated_at=NOW()
+      WHERE order_number=$1
+      RETURNING order_id`,
+    [n, e],
+  );
+  if (!r.rowCount) throw Object.assign(new Error("Pedido no encontrado"), { status: 404 });
+  return obtenerPedidoCatalogoAdminDb(n);
+}
+
+async function obtenerResumenPedidosCatalogoDb() {
+  await asegurarEsquemaCatalogoPedidos();
+  const r = await query(
+    `SELECT
+       COUNT(*)::int AS total,
+       COUNT(*) FILTER (WHERE status='recibido')::int AS recibidos,
+       COUNT(*) FILTER (WHERE status='preparando')::int AS preparando,
+       COUNT(*) FILTER (WHERE status='listo')::int AS listos,
+       COUNT(*) FILTER (WHERE status='entregado')::int AS entregados,
+       COUNT(*) FILTER (WHERE status='cancelado')::int AS cancelados,
+       COALESCE(SUM(total) FILTER (
+         WHERE status <> 'cancelado'
+           AND (created_at AT TIME ZONE 'America/Argentina/Buenos_Aires')::date =
+               (NOW() AT TIME ZONE 'America/Argentina/Buenos_Aires')::date
+       ),0)::numeric AS venta_hoy
+     FROM catalog_orders`
+  );
+  const x = r.rows[0] || {};
+  return {
+    total: Number(x.total) || 0,
+    recibidos: Number(x.recibidos) || 0,
+    preparando: Number(x.preparando) || 0,
+    listos: Number(x.listos) || 0,
+    entregados: Number(x.entregados) || 0,
+    cancelados: Number(x.cancelados) || 0,
+    ventaHoy: Number(x.venta_hoy) || 0,
+  };
 }
 
 module.exports = {
@@ -326,4 +467,7 @@ module.exports = {
   obtenerPedidoPorTokenDb,
   marcarWhatsappAbiertoPedidoDb,
   listarPedidosCatalogoDb,
+  obtenerPedidoCatalogoAdminDb,
+  actualizarEstadoPedidoCatalogoDb,
+  obtenerResumenPedidosCatalogoDb,
 };

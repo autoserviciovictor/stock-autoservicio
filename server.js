@@ -83,6 +83,9 @@ const {
   crearPedidoCatalogoDb,
   marcarWhatsappAbiertoPedidoDb,
   listarPedidosCatalogoDb,
+  obtenerPedidoCatalogoAdminDb,
+  actualizarEstadoPedidoCatalogoDb,
+  obtenerResumenPedidosCatalogoDb,
 } = require("./db-catalogo-pedidos");
 const { buscarImagenProducto, obtenerImagenNormalizadaProducto, importarImagenManual } = require("./catalogo-imagenes");
 const {
@@ -1559,6 +1562,52 @@ app.get("/dashboard/resumen", requerirSesion, async (req, res) => {
   }
 });
 
+
+
+app.get("/admin/catalogo/pedidos/resumen", requerirAdministrador, async (_req, res) => {
+  try {
+    res.json({ ok: true, ...(await obtenerResumenPedidosCatalogoDb()) });
+  } catch (error) {
+    console.error("Error consultando resumen de pedidos del catálogo:", error);
+    res.status(500).json({ ok: false, mensaje: error.message || "No se pudo consultar el resumen de pedidos" });
+  }
+});
+
+app.get("/admin/catalogo/pedidos", requerirAdministrador, async (req, res) => {
+  try {
+    const resultado = await listarPedidosCatalogoDb({
+      pagina: req.query.pagina,
+      limite: req.query.limite,
+      estado: req.query.estado,
+      busqueda: req.query.q,
+    });
+    res.json({ ok: true, ...resultado });
+  } catch (error) {
+    console.error("Error listando pedidos del catálogo:", error);
+    res.status(error.status || 500).json({ ok: false, mensaje: error.message || "No se pudieron cargar los pedidos" });
+  }
+});
+
+app.get("/admin/catalogo/pedidos/:numero", requerirAdministrador, async (req, res) => {
+  try {
+    const pedido = await obtenerPedidoCatalogoAdminDb(req.params.numero);
+    if (!pedido) return res.status(404).json({ ok: false, mensaje: "Pedido no encontrado" });
+    res.json({ ok: true, pedido });
+  } catch (error) {
+    console.error("Error consultando pedido del catálogo:", error);
+    res.status(error.status || 500).json({ ok: false, mensaje: error.message || "No se pudo consultar el pedido" });
+  }
+});
+
+app.patch("/admin/catalogo/pedidos/:numero/estado", requerirAdministrador, async (req, res) => {
+  try {
+    const pedido = await actualizarEstadoPedidoCatalogoDb(req.params.numero, req.body?.estado);
+    res.json({ ok: true, pedido });
+  } catch (error) {
+    console.error("Error actualizando estado de pedido:", error);
+    res.status(error.status || 400).json({ ok: false, mensaje: error.message || "No se pudo actualizar el estado" });
+  }
+});
 
 app.get("/admin/catalogo/estado", requerirAdministrador, async (req, res) => {
   try {

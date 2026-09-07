@@ -39,6 +39,7 @@
     <link rel="stylesheet" href="tareas-redesign.css?v=1960-d21-cierre-etapa6-010926" />
     <link rel="stylesheet" href="admin-official.css?v=1960-d21-cierre-etapa6-010926" />
     <link rel="stylesheet" href="catalogo-admin.css?v=1960-d21-cierre-etapa6-010926" />
+    <link rel="stylesheet" href="catalogo-etapa7.css?v=1960-d21-cierre-etapa6-010926" />
     <link rel="stylesheet" href="login-redesign.css?v=1960-d21-cierre-etapa6-010926" />
     <link rel="stylesheet" href="settings-user.css?v=1960-d21-cierre-etapa6-010926" />
     <link rel="stylesheet" href="ui-unification.css?v=1960-d21-cierre-etapa6-010926" />
@@ -3212,6 +3213,7 @@
           <div class="catalog-admin-tabs" role="tablist" aria-label="Secciones del catálogo">
             <button id="catalogTabProductos" class="activo" type="button" data-catalog-tab="productos" role="tab" aria-selected="true">Productos</button>
             <button id="catalogTabRubros" type="button" data-catalog-tab="rubros" role="tab" aria-selected="false">Rubros</button>
+            <button id="catalogTabPedidos" type="button" data-catalog-tab="pedidos" role="tab" aria-selected="false">Pedidos <span id="catalogPedidosBadge" class="catalog-orders-tab-badge oculto">0</span></button>
           </div>
 
           <section id="catalogPanelProductos" class="catalog-admin-panel" data-catalog-panel="productos">
@@ -3285,8 +3287,99 @@
             </div>
             <div id="catalogRubrosGrid" class="catalog-rubros-grid"></div>
           </section>
+
+          <section id="catalogPanelPedidos" class="catalog-admin-panel oculto catalog-orders-panel" data-catalog-panel="pedidos">
+            <div class="catalog-orders-head">
+              <div>
+                <h2>Pedidos del catálogo</h2>
+                <p>Consultá los pedidos recibidos desde el catálogo online y actualizá su estado.</p>
+              </div>
+              <button id="catalogPedidosRecargar" class="catalog-btn catalog-btn-secondary" type="button">
+                <svg class="app-icon"><use href="#icon-refresh"></use></svg><span>Actualizar</span>
+              </button>
+            </div>
+
+            <section class="catalog-order-metrics" aria-label="Resumen de pedidos">
+              <article><small>Recibidos</small><strong id="catalogPedidosRecibidos">—</strong><span>Pendientes de tomar</span></article>
+              <article><small>Preparando</small><strong id="catalogPedidosPreparando">—</strong><span>En preparación</span></article>
+              <article><small>Listos</small><strong id="catalogPedidosListos">—</strong><span>Para entregar</span></article>
+              <article><small>Venta de hoy</small><strong id="catalogPedidosVentaHoy">—</strong><span>Sin cancelados</span></article>
+            </section>
+
+            <div class="catalog-orders-toolbar">
+              <label class="catalog-search">
+                <svg class="app-icon"><use href="#icon-search"></use></svg>
+                <input id="catalogPedidosBuscar" type="search" autocomplete="off" placeholder="Buscar por pedido, cliente, teléfono o dirección..." />
+              </label>
+              <select id="catalogPedidosFiltroEstado" aria-label="Filtrar pedidos por estado">
+                <option value="todos">Todos los estados</option>
+                <option value="recibido">Recibidos</option>
+                <option value="preparando">Preparando</option>
+                <option value="listo">Listos</option>
+                <option value="entregado">Entregados</option>
+                <option value="cancelado">Cancelados</option>
+              </select>
+            </div>
+
+            <div class="catalog-table-card">
+              <div class="catalog-table-scroll">
+                <table class="catalog-orders-table">
+                  <thead>
+                    <tr><th>Pedido</th><th>Cliente</th><th>Entrega</th><th>Total</th><th>Estado</th><th>Fecha</th><th>Acciones</th></tr>
+                  </thead>
+                  <tbody id="catalogPedidosBody"><tr><td colspan="7"><div class="catalog-loading">Cargando pedidos…</div></td></tr></tbody>
+                </table>
+              </div>
+              <footer class="catalog-pagination-bar">
+                <span id="catalogPedidosResumen">—</span>
+                <div class="catalog-pagination" id="catalogPedidosPaginacion"></div>
+              </footer>
+            </div>
+          </section>
+
         </section>
       </main>
+
+
+      <div id="catalogPedidoModal" class="modal-overlay catalog-modal-overlay oculto" aria-hidden="true">
+        <div class="modal-card catalog-order-modal" role="dialog" aria-modal="true" aria-labelledby="catalogPedidoModalTitulo">
+          <header class="catalog-modal-head">
+            <div class="catalog-modal-title-wrap">
+              <span class="catalog-modal-icon"><svg class="app-icon"><use href="#icon-box"></use></svg></span>
+              <div><span>PEDIDO DEL CATÁLOGO</span><h2 id="catalogPedidoModalTitulo">Detalle del pedido</h2><p id="catalogPedidoModalNumero">—</p></div>
+            </div>
+            <button id="catalogPedidoCerrar" class="modal-close" type="button" aria-label="Cerrar"><svg class="app-icon"><use href="#icon-close"></use></svg></button>
+          </header>
+          <div class="catalog-modal-body catalog-order-modal-body">
+            <section class="catalog-order-detail-grid">
+              <article><small>Cliente</small><strong id="catalogPedidoCliente">—</strong><span id="catalogPedidoTelefono">—</span></article>
+              <article><small>Entrega</small><strong id="catalogPedidoEntrega">—</strong><span id="catalogPedidoDireccion">—</span></article>
+              <article><small>Forma de pago</small><strong id="catalogPedidoPago">—</strong><span id="catalogPedidoWhatsapp">—</span></article>
+              <article><small>Fecha</small><strong id="catalogPedidoFecha">—</strong><span id="catalogPedidoActualizado">—</span></article>
+            </section>
+
+            <section class="catalog-order-status-editor">
+              <label class="catalog-field">
+                <span>Estado del pedido</span>
+                <select id="catalogPedidoEstado">
+                  <option value="recibido">Recibido</option>
+                  <option value="preparando">Preparando</option>
+                  <option value="listo">Listo</option>
+                  <option value="entregado">Entregado</option>
+                  <option value="cancelado">Cancelado</option>
+                </select>
+              </label>
+              <button id="catalogPedidoGuardarEstado" class="catalog-btn catalog-btn-primary" type="button">Guardar estado</button>
+            </section>
+
+            <section class="catalog-order-items-card">
+              <header><strong>Productos</strong><span id="catalogPedidoItemsResumen">—</span></header>
+              <div id="catalogPedidoItems" class="catalog-order-items"></div>
+              <footer><span>Total</span><strong id="catalogPedidoTotal">—</strong></footer>
+            </section>
+          </div>
+        </div>
+      </div>
 
       <div id="catalogProductoModal" class="modal-overlay catalog-modal-overlay oculto" aria-hidden="true">
         <div class="modal-card catalog-product-modal" role="dialog" aria-modal="true" aria-labelledby="catalogProductoModalTitulo">

@@ -14,6 +14,13 @@ const estado = {
   cargando: false,
   imagenPreviewObjectUrl: "",
   procesoImagenesTimer: null,
+  pedidosPagina: 1,
+  pedidosLimite: 50,
+  pedidosPaginas: 1,
+  pedidosTotal: 0,
+  pedidos: [],
+  pedidoAbierto: null,
+  pedidosBusquedaTimer: null,
 };
 
 const esc = (v = "") => String(v).replace(/[&<>'"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[c]));
@@ -181,10 +188,174 @@ function renderPaginacion() {
   cont.querySelectorAll("button[data-page]").forEach((b) => b.addEventListener("click", () => { estado.pagina = Number(b.dataset.page); cargarProductos(); window.scrollTo({ top: 0, behavior: "smooth" }); }));
 }
 
+function fechaHora(valor) {
+  if (!valor) return "—";
+  const d = new Date(valor);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleString("es-AR", {
+    timeZone: "America/Argentina/Buenos_Aires",
+    day: "2-digit", month: "2-digit", year: "2-digit",
+    hour: "2-digit", minute: "2-digit",
+  });
+}
+
+function etiquetaEstadoPedido(estadoPedido) {
+  return ({
+    recibido: "Recibido",
+    preparando: "Preparando",
+    listo: "Listo",
+    entregado: "Entregado",
+    cancelado: "Cancelado",
+  })[estadoPedido] || estadoPedido || "—";
+}
+
+function parametrosPedidos() {
+  const p = new URLSearchParams({
+    pagina: String(estado.pedidosPagina),
+    limite: String(estado.pedidosLimite),
+    estado: $("catalogPedidosFiltroEstado")?.value || "todos",
+  });
+  const q = $("catalogPedidosBuscar")?.value?.trim();
+  if (q) p.set("q", q);
+  return p.toString();
+}
+
+async function cargarResumenPedidos() {
+  const data = await api("/admin/catalogo/pedidos/resumen");
+  $("catalogPedidosRecibidos").textContent = numero(data.recibidos);
+  $("catalogPedidosPreparando").textContent = numero(data.preparando);
+  $("catalogPedidosListos").textContent = numero(data.listos);
+  $("catalogPedidosVentaHoy").textContent = moneda(data.ventaHoy);
+  const badge = $("catalogPedidosBadge");
+  if (badge) {
+    badge.textContent = numero(data.recibidos);
+    badge.classList.toggle("oculto", !Number(data.recibidos));
+  }
+}
+
+async function cargarPedidos({ conservarPagina = true } = {}) {
+  if (!conservarPagina) estado.pedidosPagina = 1;
+  const body = $("catalogPedidosBody");
+  if (body) body.innerHTML = '<tr><td colspan="7"><div class="catalog-loading">Cargando pedidos…</div></td></tr>';
+  const data = await api(`/admin/catalogo/pedidos?${parametrosPedidos()}`);
+  estado.pedidos = data.pedidos || [];
+  estado.pedidosPagina = Number(data.pagina) || 1;
+  estado.pedidosPaginas = Number(data.paginas) || 1;
+  estado.pedidosTotal = Number(data.total) || 0;
+  renderPedidos();
+}
+
+function renderPedidos() {
+  const body = $("catalogPedidosBody");
+  if (!body) return;
+  if (!estado.pedidos.length) {
+    body.innerHTML = '<tr><td colspan="7"><div class="catalog-empty">No hay pedidos para mostrar.</div></td></tr>';
+  } else {
+    body.innerHTML = estado.pedidos.map((p) => `
+      <tr>
+        <td><div class="catalog-order-number"><strong>${esc(p.numero)}</strong><small>${numero(p.unidades)} unidades · ${numero(p.productos)} productos</small></div></td>
+        <td><div class="catalog-order-customer"><strong>${esc(p.cliente)}</strong><small>${esc(p.telefono)}</small></div></td>
+        <td><div class="catalog-order-delivery"><strong>${p.entrega === "delivery" ? `Delivery ${esc(p.horario || "")}` : "Retiro"}</strong><small>${p.entrega === "delivery" ? esc(p.direccion || "") : "Retiro en autoservicio"}</small></div></td>
+        <td><strong class="catalog-price">${moneda(p.total)}</strong></td>
+        <td><span class="catalog-order-status status-${esc(p.estado)}">${esc(etiquetaEstadoPedido(p.estado))}</span></td>
+        <td>${fechaHora(p.creadoEn)}</td>
+        <td><button class="catalog-edit-btn" type="button" data-pedido-open="${esc(p.numero)}">Ver pedido</button></td>
+      </tr>`).join("");
+  }
+
+  const desde = estado.pedidosTotal ? (estado.pedidosPagina - 1) * estado.pedidosLimite + 1 : 0;
+  const hasta = Math.min(estado.pedidosTotal, estado.pedidosPagina * estado.pedidosLimite);
+  $("catalogPedidosResumen").textContent = estado.pedidosTotal
+    ? `Mostrando ${numero(desde)}–${numero(hasta)} de ${numero(estado.pedidosTotal)} pedidos`
+    : "Sin pedidos";
+
+  renderPaginacionPedidos();
+  body.querySelectorAll("[data-pedido-open]").forEach((b) => b.addEventListener("click", () => abrirPedido(b.dataset.pedidoOpen)));
+}
+
+function renderPaginacionPedidos() {
+  const cont = $("catalogPedidosPaginacion");
+  if (!cont) return;
+  if (estado.pedidosPaginas <= 1) { cont.innerHTML = ""; return; }
+  const parts = [];
+  parts.push(`<button data-pedido-page="${Math.max(1, estado.pedidosPagina - 1)}" ${estado.pedidosPagina === 1 ? "disabled" : ""}>‹</button>`);
+  for (let n = 1; n <= estado.pedidosPaginas; n++) {
+    if (estado.pedidosPaginas > 7 && n > 2 && n < estado.pedidosPaginas - 1 && Math.abs(n - estado.pedidosPagina) > 1) {
+      if (n === 3 || n === estado.pedidosPaginas - 2) parts.push("<button disabled>…</button>");
+      continue;
+    }
+    parts.push(`<button data-pedido-page="${n}" class="${n === estado.pedidosPagina ? "activo" : ""}">${n}</button>`);
+  }
+  parts.push(`<button data-pedido-page="${Math.min(estado.pedidosPaginas, estado.pedidosPagina + 1)}" ${estado.pedidosPagina === estado.pedidosPaginas ? "disabled" : ""}>›</button>`);
+  cont.innerHTML = parts.join("");
+  cont.querySelectorAll("[data-pedido-page]").forEach((b) => b.addEventListener("click", () => {
+    estado.pedidosPagina = Number(b.dataset.pedidoPage);
+    cargarPedidos().catch((e) => mensaje(e.message));
+  }));
+}
+
+async function abrirPedido(numeroPedido) {
+  const data = await api(`/admin/catalogo/pedidos/${encodeURIComponent(numeroPedido)}`);
+  const p = data.pedido;
+  estado.pedidoAbierto = p;
+
+  $("catalogPedidoModalNumero").textContent = p.numero;
+  $("catalogPedidoCliente").textContent = p.cliente;
+  $("catalogPedidoTelefono").textContent = p.telefono;
+  $("catalogPedidoEntrega").textContent = p.entrega === "delivery" ? `Delivery · ${p.horario || "A confirmar"}` : "Retiro";
+  $("catalogPedidoDireccion").textContent = p.entrega === "delivery"
+    ? [p.direccion, p.referencia].filter(Boolean).join(" · ")
+    : "Retiro en Autoservicio Victor";
+  $("catalogPedidoPago").textContent = p.pago;
+  $("catalogPedidoWhatsapp").textContent = p.whatsappAbierto ? "WhatsApp abierto" : "WhatsApp no confirmado";
+  $("catalogPedidoFecha").textContent = fechaHora(p.creadoEn);
+  $("catalogPedidoActualizado").textContent = `Actualizado: ${fechaHora(p.actualizadoEn)}`;
+  $("catalogPedidoEstado").value = p.estado;
+  $("catalogPedidoItemsResumen").textContent = `${numero(p.unidades)} unidades · ${numero(p.productos)} productos`;
+  $("catalogPedidoTotal").textContent = moneda(p.total);
+
+  $("catalogPedidoItems").innerHTML = (p.items || []).map((item) => `
+    <div class="catalog-order-item">
+      <div><strong>${esc(item.nombre)}</strong><small>${esc(item.codigo)} · ${esc(item.unidadVenta || "unidad")}</small></div>
+      <span>${numero(item.cantidad)} × ${moneda(item.precio)}</span>
+      <strong>${moneda(item.total)}</strong>
+    </div>`).join("");
+
+  abrirModal("catalogPedidoModal");
+}
+
+async function guardarEstadoPedido() {
+  const p = estado.pedidoAbierto;
+  if (!p) return;
+  const boton = $("catalogPedidoGuardarEstado");
+  boton.disabled = true;
+  try {
+    const data = await api(`/admin/catalogo/pedidos/${encodeURIComponent(p.numero)}/estado`, {
+      method: "PATCH",
+      body: JSON.stringify({ estado: $("catalogPedidoEstado").value }),
+    });
+    estado.pedidoAbierto = data.pedido;
+    cerrarModal("catalogPedidoModal");
+    await Promise.all([cargarPedidos(), cargarResumenPedidos()]);
+    mensaje(`Pedido ${p.numero} actualizado a ${etiquetaEstadoPedido(data.pedido.estado)}.`, "ok");
+  } catch (e) {
+    mensaje(e.message);
+  } finally {
+    boton.disabled = false;
+  }
+}
+
 function cambiarTab(tab) {
-  estado.tab = tab === "rubros" ? "rubros" : "productos";
-  document.querySelectorAll("[data-catalog-tab]").forEach((b) => { const on = b.dataset.catalogTab === estado.tab; b.classList.toggle("activo", on); b.setAttribute("aria-selected", String(on)); });
+  estado.tab = ["rubros", "pedidos"].includes(tab) ? tab : "productos";
+  document.querySelectorAll("[data-catalog-tab]").forEach((b) => {
+    const on = b.dataset.catalogTab === estado.tab;
+    b.classList.toggle("activo", on);
+    b.setAttribute("aria-selected", String(on));
+  });
   document.querySelectorAll("[data-catalog-panel]").forEach((p) => p.classList.toggle("oculto", p.dataset.catalogPanel !== estado.tab));
+  if (estado.tab === "pedidos") {
+    Promise.all([cargarPedidos({ conservarPagina: false }), cargarResumenPedidos()]).catch((e) => mensaje(e.message));
+  }
 }
 
 function etiquetaEstadoImagen(valor) {
@@ -545,6 +716,7 @@ async function guardarRubro() {
   try {
     await api(id ? `/admin/catalogo/rubros/${id}` : "/admin/catalogo/rubros", { method: id ? "PUT" : "POST", body: JSON.stringify({ nombre: $("catalogRubroNombre").value, descripcion: $("catalogRubroDescripcion").value, activo: $("catalogRubroActivo").checked }) });
     cerrarModal("catalogRubroModal");
+  cerrarModal("catalogPedidoModal");
     await Promise.all([cargarRubros(), cargarEstado(), cargarProductos()]);
     mensaje(id ? "Rubro actualizado." : "Rubro creado.", "ok");
   } catch (e) { mensaje(e.message); }
@@ -560,6 +732,7 @@ async function eliminarRubro() {
   try {
     await api(`/admin/catalogo/rubros/${id}`, { method: "DELETE" });
     cerrarModal("catalogRubroModal");
+  cerrarModal("catalogPedidoModal");
     await Promise.all([cargarRubros(), cargarEstado()]);
     mensaje("Rubro eliminado.", "ok");
   } catch (e) { mensaje(e.message); }
@@ -585,6 +758,14 @@ function bind() {
   $("catalogBtnPausarImagenes")?.addEventListener("click", pausarImagenes);
   $("catalogBtnReiniciarImagenes")?.addEventListener("click", reiniciarImagenesGratis);
   $("catalogBtnRecargar")?.addEventListener("click", () => Promise.all([cargarEstado(), cargarRubros(), cargarProductos()]).catch((e) => mensaje(e.message)));
+  $("catalogPedidosBuscar")?.addEventListener("input", () => {
+    clearTimeout(estado.pedidosBusquedaTimer);
+    estado.pedidosBusquedaTimer = setTimeout(() => cargarPedidos({ conservarPagina: false }).catch((e) => mensaje(e.message)), 260);
+  });
+  $("catalogPedidosFiltroEstado")?.addEventListener("change", () => cargarPedidos({ conservarPagina: false }).catch((e) => mensaje(e.message)));
+  $("catalogPedidosRecargar")?.addEventListener("click", () => Promise.all([cargarPedidos(), cargarResumenPedidos()]).catch((e) => mensaje(e.message)));
+  $("catalogPedidoGuardarEstado")?.addEventListener("click", guardarEstadoPedido);
+  $("catalogPedidoCerrar")?.addEventListener("click", () => cerrarModal("catalogPedidoModal"));
   $("catalogBtnVerPublico")?.addEventListener("click", () => window.open(new URL("./catalogo/", location.href).href, "_blank", "noopener"));
   $("catalogBtnNuevoRubro")?.addEventListener("click", () => abrirRubro());
   $("catalogProductoGuardar")?.addEventListener("click", guardarProducto);
@@ -598,7 +779,7 @@ function bind() {
   $("catalogRubroEliminar")?.addEventListener("click", eliminarRubro);
   $("catalogRubroCerrar")?.addEventListener("click", () => cerrarModal("catalogRubroModal"));
   $("catalogRubroCancelar")?.addEventListener("click", () => cerrarModal("catalogRubroModal"));
-  ["catalogProductoModal", "catalogRubroModal"].forEach((id) => $(id)?.addEventListener("click", (e) => { if (e.target.id === id) cerrarModal(id); }));
+  ["catalogProductoModal", "catalogRubroModal", "catalogPedidoModal"].forEach((id) => $(id)?.addEventListener("click", (e) => { if (e.target.id === id) cerrarModal(id); }));
 }
 
 async function activar() {
@@ -606,7 +787,7 @@ async function activar() {
   estado.activo = true;
   bind();
   try {
-    await Promise.all([cargarEstado(), cargarRubros()]);
+    await Promise.all([cargarEstado(), cargarRubros(), cargarResumenPedidos()]);
     await cargarProductos({ conservarPagina: false });
     await cargarProcesoImagenes();
   } catch (e) { mensaje(e.message); }
@@ -616,6 +797,7 @@ function desactivar() {
   clearTimeout(estado.procesoImagenesTimer);
   cerrarModal("catalogProductoModal");
   cerrarModal("catalogRubroModal");
+  cerrarModal("catalogPedidoModal");
 }
 
 window.CatalogoAdminModule = { activar, desactivar, recargar: activar };
