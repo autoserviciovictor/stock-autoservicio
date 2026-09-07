@@ -4,7 +4,11 @@ const OFF_TIMEOUT_MS = 6500;
 const BRAVE_TIMEOUT_MS = 7000;
 const SEARCHALICIOUS_TIMEOUT_MS = 7000;
 const LEGACY_SEARCH_TIMEOUT_MS = 7000;
+const WEB_SEARCH_TIMEOUT_MS = 8000;
+const WEB_PAGE_TIMEOUT_MS = 8000;
 const MAX_RESULTADOS_GRATUITOS_TEXTO = 12;
+const MAX_RESULTADOS_WEB = 6;
+const MAX_PAGINAS_WEB = 4;
 const MAX_CANDIDATOS = 24;
 const MAX_RESULTADOS_BRAVE = 30;
 
@@ -13,9 +17,9 @@ function codigoEAN(valor = "") {
   return limpio.length >= 8 && limpio.length <= 14 ? limpio : "";
 }
 
-function urlHttps(valor = "") {
+function urlHttps(valor = "", base = "") {
   try {
-    const u = new URL(String(valor || "").trim());
+    const u = base ? new URL(String(valor || "").trim(), base) : new URL(String(valor || "").trim());
     if (u.protocol !== "https:") return "";
     return u.href.slice(0, 1200);
   } catch {
@@ -51,6 +55,31 @@ async function fetchJson(url, timeoutMs, extraHeaders = {}) {
     });
     if (!r.ok) return null;
     return await r.json();
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function fetchText(url, timeoutMs, extraHeaders = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const r = await fetch(url, {
+      signal: controller.signal,
+      redirect: "follow",
+      headers: {
+        Accept: "text/html,application/xhtml+xml",
+        "Accept-Language": "es-AR,es;q=0.9,en;q=0.6",
+        "User-Agent": "Mozilla/5.0 (compatible; AutoservicioVictorCatalogo/1.0; +https://autoserviciovictor.github.io)",
+        ...extraHeaders,
+      },
+    });
+    if (!r.ok) return null;
+    const tipo = String(r.headers.get("content-type") || "").toLowerCase();
+    if (tipo && !tipo.includes("text/html") && !tipo.includes("application/xhtml+xml")) return null;
+    return await r.text();
   } catch {
     return null;
   } finally {
@@ -128,7 +157,7 @@ function deduplicarYOrdenar(candidatos, producto) {
 function candidatosOpenFacts(data, proveedor, fuente, consulta, producto) {
   if (!data || Number(data.status) !== 1 || !data.product) return [];
   const p = data.product || {};
-  const urls = [p.image_front_url, p.image_url, p.image_front_small_url].map(urlHttps).filter(Boolean);
+  const urls = [p.image_front_url, p.image_url, p.image_front_small_url].map((v) => urlHttps(v)).filter(Boolean);
   return [...new Set(urls)].map((url, indice) => ({
     url,
     proveedor,
@@ -147,8 +176,6 @@ async function buscarEnOpenFacts(producto) {
   const ean = codigoEAN(producto.codigo);
   if (!ean) return { candidatos: [], fuentes: [], consultas: [] };
   const fields = "code,product_name,brands,quantity,image_front_url,image_url,image_front_small_url";
-  // Las cuatro bases Open Facts usan la misma API y no requieren una clave paga.
-  // Consultamos por EAN exacto para minimizar falsos positivos.
   const fuentes = [
     { proveedor: "open_food_facts", fuente: "Open Food Facts", url: `https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(ean)}.json?fields=${fields}` },
     { proveedor: "open_beauty_facts", fuente: "Open Beauty Facts", url: `https://world.openbeautyfacts.org/api/v2/product/${encodeURIComponent(ean)}.json?fields=${fields}` },
@@ -183,7 +210,7 @@ function productosDeRespuestaBusqueda(data) {
 function candidatosBusquedaTexto(items, proveedor, fuente, consulta, producto, base = 54) {
   return items.flatMap((item, indice) => {
     const p = item?._source || item?.document || item || {};
-    const urls = [p.image_front_url, p.image_url, p.image_front_small_url].map(urlHttps).filter(Boolean);
+    const urls = [p.image_front_url, p.image_url, p.image_front_small_url].map((v) => urlHttps(v)).filter(Boolean);
     return [...new Set(urls)].map((url, imageIndex) => ({
       url,
       proveedor,
@@ -239,28 +266,213 @@ async function buscarEnOpenFoodFactsLegacy(producto) {
   };
 }
 
+function decodificarHtml(valor = "") {
+  return String(valor || "")
+    .replace(/&amp;/gi, "&")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n) || 32));
+}
+
+function limpiarHtml(valor = "") {
+  return texto(decodificarHtml(String(valor || "").replace(/<[^>]+>/g, " ")), 260);
+}
+
+function dominioDescartadoWeb(url = "") {
+  const host = dominioDeUrl(url);
+  if (!host) return true;
+  return [
+    "google.com", "google.com.ar", "bing.com", "duckduckgo.com",
+    "facebook.com", "instagram.com", "pinterest.com", "tiktok.com",
+    "youtube.com", "x.com", "twitter.com", "mercadolibre.com",
+  ].some((d) => host === d || host.endsWith(`.${d}`));
+}
+
+function urlResultadoDuckDuckGo(href = "") {
+  const limpio = decodificarHtml(href);
+  try {
+    const u = new URL(limpio, "https://html.duckduckgo.com/");
+    const destino = u.searchParams.get("uddg");
+    const final = destino ? decodeURIComponent(destino) : u.href;
+    return urlHttps(final);
+  } catch {
+    return "";
+  }
+}
+
+function parsearResultadosDuckDuckGo(html = "") {
+  const salida = [];
+  const re = /<a[^>]+class=["'][^"']*result__a[^"']*["'][^>]+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
+  let m;
+  while ((m = re.exec(String(html || ""))) && salida.length < MAX_RESULTADOS_WEB) {
+    const url = urlResultadoDuckDuckGo(m[1]);
+    if (!url || dominioDescartadoWeb(url)) continue;
+    const titulo = limpiarHtml(m[2]);
+    if (!titulo) continue;
+    salida.push({ url, titulo, dominio: dominioDeUrl(url) });
+  }
+  return salida;
+}
+
+function extraerMeta(html = "", atributo = "", valor = "") {
+  const patron1 = new RegExp(`<meta[^>]+${atributo}=["']${valor.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}["'][^>]+content=["']([^"']+)["'][^>]*>`, "i");
+  const patron2 = new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+${atributo}=["']${valor.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}["'][^>]*>`, "i");
+  return decodificarHtml((String(html || "").match(patron1) || String(html || "").match(patron2) || [])[1] || "");
+}
+
+function extraerTituloPagina(html = "") {
+  const og = extraerMeta(html, "property", "og:title");
+  if (og) return limpiarHtml(og);
+  const title = (String(html || "").match(/<title[^>]*>([\s\S]*?)<\/title>/i) || [])[1] || "";
+  return limpiarHtml(title);
+}
+
+function imagenesJsonLd(html = "") {
+  const urls = [];
+  const scripts = String(html || "").match(/<script[^>]+type=["']application\/ld\+json["'][^>]*>[\s\S]*?<\/script>/gi) || [];
+  for (const script of scripts.slice(0, 8)) {
+    const cuerpo = script.replace(/^.*?>/s, "").replace(/<\/script>\s*$/i, "").trim();
+    if (!cuerpo || cuerpo.length > 400000) continue;
+    try {
+      const data = JSON.parse(decodificarHtml(cuerpo));
+      const pendientes = Array.isArray(data) ? [...data] : [data];
+      while (pendientes.length && urls.length < 5) {
+        const item = pendientes.shift();
+        if (!item || typeof item !== "object") continue;
+        if (Array.isArray(item["@graph"])) pendientes.push(...item["@graph"]);
+        const image = item.image;
+        if (typeof image === "string") urls.push(image);
+        else if (Array.isArray(image)) {
+          for (const x of image) {
+            if (typeof x === "string") urls.push(x);
+            else if (x && typeof x === "object" && typeof x.url === "string") urls.push(x.url);
+          }
+        } else if (image && typeof image === "object" && typeof image.url === "string") {
+          urls.push(image.url);
+        }
+      }
+    } catch {
+      // JSON-LD inválido: seguimos con metadatos Open Graph/Twitter.
+    }
+  }
+  return urls;
+}
+
+function extraerImagenesPagina(html = "", paginaUrl = "") {
+  const crudas = [
+    extraerMeta(html, "property", "og:image"),
+    extraerMeta(html, "property", "og:image:secure_url"),
+    extraerMeta(html, "name", "twitter:image"),
+    extraerMeta(html, "property", "twitter:image"),
+    ...imagenesJsonLd(html),
+  ];
+  const salida = [];
+  for (const valor of crudas) {
+    const url = urlHttps(valor, paginaUrl);
+    if (!url) continue;
+    if (!salida.includes(url)) salida.push(url);
+    if (salida.length >= 4) break;
+  }
+  return salida;
+}
+
+function puntajeDominioWeb(producto, resultado) {
+  const host = String(resultado?.dominio || "");
+  const objetivo = palabrasSignificativas([producto.marca, producto.nombre].filter(Boolean).join(" "));
+  let score = 52;
+  if (objetivo.some((p) => host.includes(p))) score += 8;
+  const coincidencias = puntajeTexto(producto, resultado?.titulo || "");
+  score += Math.min(14, coincidencias);
+  return Math.min(76, score);
+}
+
+async function buscarPaginasWebPorNombre(producto) {
+  const consulta = consultaTextoGratis(producto);
+  if (!consulta) return { candidatos: [], fuentes: [], consultas: [] };
+
+  // Búsqueda web gratuita por nombre. No usa Google Images ni una API paga:
+  // encuentra páginas públicas del producto y toma sus metadatos og:image /
+  // twitter:image / JSON-LD para obtener la imagen original del artículo.
+  const params = new URLSearchParams({
+    q: `"${consulta}"`,
+    kl: "ar-es",
+  });
+  const html = await fetchText(`https://html.duckduckgo.com/html/?${params}`, WEB_SEARCH_TIMEOUT_MS, {
+    Referer: "https://duckduckgo.com/",
+  });
+  if (!html) return { candidatos: [], fuentes: [], consultas: [consulta] };
+
+  const resultados = parsearResultadosDuckDuckGo(html);
+  const candidatos = [];
+  const fuentes = [];
+
+  for (const resultado of resultados.slice(0, MAX_PAGINAS_WEB)) {
+    const pagina = await fetchText(resultado.url, WEB_PAGE_TIMEOUT_MS);
+    if (!pagina) continue;
+    const tituloPagina = extraerTituloPagina(pagina) || resultado.titulo || producto.nombre;
+    const imagenes = extraerImagenesPagina(pagina, resultado.url);
+    if (!imagenes.length) continue;
+    const base = puntajeDominioWeb(producto, { ...resultado, titulo: tituloPagina });
+    fuentes.push(`Web · ${resultado.dominio}`);
+    imagenes.forEach((url, indice) => {
+      candidatos.push({
+        url,
+        proveedor: "web_nombre_gratis",
+        fuente: `Web · ${resultado.dominio}`,
+        dominio: resultado.dominio,
+        titulo: tituloPagina,
+        marca: producto.marca || "",
+        presentacion: producto.presentacion || "",
+        consulta,
+        exactaEAN: false,
+        tipoCoincidencia: "web_por_nombre",
+        puntajePreliminar: Math.max(44, base - indice * 3),
+      });
+    });
+    if (candidatos.length >= 10) break;
+  }
+
+  return {
+    candidatos,
+    fuentes: [...new Set(fuentes)],
+    consultas: [consulta],
+  };
+}
+
 async function buscarFuentesGratuitas(producto) {
   const exactas = await buscarEnOpenFacts(producto);
   if (exactas.candidatos.length) return { ...exactas, modo: "ean_exacto" };
+
+  // La web por nombre va antes que las búsquedas internas de Open Food Facts:
+  // cubre productos argentinos que existen en fabricantes/comercios pero no
+  // están cargados en las bases abiertas por EAN.
+  const web = await buscarPaginasWebPorNombre(producto);
+  if (web.candidatos.length) {
+    return {
+      candidatos: web.candidatos,
+      fuentes: [...new Set([...exactas.fuentes, ...web.fuentes])],
+      consultas: [...new Set([...exactas.consultas, ...web.consultas])],
+      modo: "web_por_nombre",
+    };
+  }
 
   const textoPrincipal = await buscarEnSearchALicious(producto);
   if (textoPrincipal.candidatos.length) {
     return {
       candidatos: textoPrincipal.candidatos,
-      fuentes: [...new Set([...exactas.fuentes, ...textoPrincipal.fuentes])],
-      consultas: [...new Set([...exactas.consultas, ...textoPrincipal.consultas])],
+      fuentes: [...new Set([...exactas.fuentes, ...web.fuentes, ...textoPrincipal.fuentes])],
+      consultas: [...new Set([...exactas.consultas, ...web.consultas, ...textoPrincipal.consultas])],
       modo: "texto_gratuito",
     };
   }
 
-  // Search-a-licious sigue evolucionando. Si temporalmente no responde o no
-  // devuelve resultados, usamos el buscador histórico de Open Food Facts como
-  // respaldo gratuito, con una sola consulta adicional.
   const alterna = await buscarEnOpenFoodFactsLegacy(producto);
   return {
     candidatos: alterna.candidatos,
-    fuentes: [...new Set([...exactas.fuentes, ...textoPrincipal.fuentes, ...alterna.fuentes])],
-    consultas: [...new Set([...exactas.consultas, ...textoPrincipal.consultas, ...alterna.consultas])],
+    fuentes: [...new Set([...exactas.fuentes, ...web.fuentes, ...textoPrincipal.fuentes, ...alterna.fuentes])],
+    consultas: [...new Set([...exactas.consultas, ...web.consultas, ...textoPrincipal.consultas, ...alterna.consultas])],
     modo: alterna.candidatos.length ? "texto_gratuito_alternativo" : "sin_resultado",
   };
 }
@@ -331,7 +543,6 @@ async function buscarEnBrave(producto) {
     const encontrados = await ejecutarBrave(consulta, apiKey, producto);
     candidatos.push(...encontrados);
     consultasEjecutadas.push(consulta.q);
-    // Evitamos gastar una segunda solicitud si la primera ya dio variedad suficiente.
     if (i === 0 && encontrados.length >= 10) break;
   }
   return { candidatos, fuentes: ["Brave Search"], consultas: consultasEjecutadas, configurado: true };
@@ -366,4 +577,8 @@ module.exports = {
   consultaTextoGratis,
   productosDeRespuestaBusqueda,
   buscarFuentesGratuitas,
+  buscarPaginasWebPorNombre,
+  parsearResultadosDuckDuckGo,
+  extraerImagenesPagina,
+  extraerTituloPagina,
 };
