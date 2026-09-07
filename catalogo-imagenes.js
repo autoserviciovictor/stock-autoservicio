@@ -6,51 +6,14 @@ const {
   listarPendientesImagenCatalogoDb,
 } = require("./db-catalogo-publico");
 const { ESTADOS_IMAGEN } = require("./catalogo-imagenes-estado");
+const { buscarCandidatosMultiples, urlHttps } = require("./catalogo-imagenes-busqueda");
 
-const OFF_TIMEOUT_MS = 6500;
-const BRAVE_TIMEOUT_MS = 7000;
 const IMAGEN_TIMEOUT_MS = 8000;
 const MAX_IMAGEN_BYTES = 8 * 1024 * 1024;
 const MAX_LOTE = 60;
 const CONCURRENCIA = 3;
 const LADO_CATALOGO = 600;
 const FONDO_BLANCO_MINIMO = 0.88;
-
-function codigoEAN(valor = "") {
-  const limpio = String(valor || "").replace(/\D/g, "");
-  return limpio.length >= 8 && limpio.length <= 14 ? limpio : "";
-}
-
-function urlHttps(valor = "") {
-  try {
-    const u = new URL(String(valor || "").trim());
-    if (u.protocol !== "https:") return "";
-    return u.href.slice(0, 1200);
-  } catch {
-    return "";
-  }
-}
-
-async function fetchJson(url, timeoutMs, extraHeaders = {}) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const r = await fetch(url, {
-      signal: controller.signal,
-      headers: {
-        Accept: "application/json",
-        "User-Agent": "AutoservicioVictorCatalogo/1.0 (product-image-matching)",
-        ...extraHeaders,
-      },
-    });
-    if (!r.ok) return null;
-    return await r.json();
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(timer);
-  }
-}
 
 async function descargarImagen(url, timeoutMs = IMAGEN_TIMEOUT_MS) {
   const segura = urlHttps(url);
@@ -204,105 +167,13 @@ async function validarCandidato(candidato) {
   return null;
 }
 
-function candidatosOpenFacts(data, fuente) {
-  if (!data || Number(data.status) !== 1 || !data.product) return [];
-  const p = data.product || {};
-  const urls = [p.image_front_url, p.image_url, p.image_front_small_url]
-    .map(urlHttps)
-    .filter(Boolean);
-  return [...new Set(urls)].map((imagen) => ({
-    url: imagen,
-    fuente,
-    titulo: String(p.product_name || "").trim().slice(0, 220),
-    marca: String(p.brands || "").trim().slice(0, 160),
-    presentacion: String(p.quantity || "").trim().slice(0, 120),
-    puntaje: 82,
-    exacta: true,
-    calidadVerificada: false,
-  }));
-}
-
-async function buscarPorEAN(codigo) {
-  const ean = codigoEAN(codigo);
-  if (!ean) return null;
-  const fields = "code,product_name,brands,quantity,image_front_url,image_url,image_front_small_url";
-  const urls = [
-    [`https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(ean)}.json?fields=${fields}`, "Open Food Facts"],
-    [`https://world.openproductsfacts.org/api/v2/product/${encodeURIComponent(ean)}.json?fields=${fields}`, "Open Products Facts"],
-  ];
-  for (const [url, fuente] of urls) {
-    const data = await fetchJson(url, OFF_TIMEOUT_MS);
-    for (const candidato of candidatosOpenFacts(data, fuente)) {
-      const valido = await validarCandidato(candidato);
-      if (valido) return valido;
-    }
-  }
-  return null;
-}
-
-async function buscarBrave(producto) {
-  const apiKey = String(process.env.BRAVE_SEARCH_API_KEY || "").trim();
-  if (!apiKey) return null;
-
-  const descripcion = [producto.marca, producto.nombre, producto.presentacion].filter(Boolean).join(" ").trim();
-  if (!descripcion) return null;
-
-  const consulta = [
-    codigoEAN(producto.codigo),
-    descripcion,
-    "producto fondo blanco solo producto packshot envase",
-  ].filter(Boolean).join(" ").trim();
-
-  const params = new URLSearchParams({
-    q: consulta.slice(0, 380),
-    country: "AR",
-    search_lang: "es",
-    safesearch: "strict",
-    count: "30",
-    spellcheck: "true",
-  });
-
-  const data = await fetchJson(
-    `https://api.search.brave.com/res/v1/images/search?${params}`,
-    BRAVE_TIMEOUT_MS,
-    { "X-Subscription-Token": apiKey }
-  );
-
-  const items = Array.isArray(data?.results) ? data.results : [];
-  const candidatos = items.map((item) => {
-    const imagen = urlHttps(item?.properties?.url);
-    const miniatura = urlHttps(item?.thumbnail?.src);
-    if (!imagen && !miniatura) return null;
-
-    const w = Number(item?.properties?.width) || Number(item?.thumbnail?.width) || 0;
-    const h = Number(item?.properties?.height) || Number(item?.thumbnail?.height) || 0;
-    if (w && h && (w < 400 || h < 400)) return null;
-
-    const ratio = w && h ? w / h : 1;
-    if (ratio < 0.42 || ratio > 2.35) return null;
-
-    const confianza = String(item?.confidence || "").toLowerCase();
-    const bonusConfianza = confianza === "high" ? 8 : confianza === "medium" ? 4 : 0;
-    const cercaniaCuadrado = 1 - Math.min(1, Math.abs(1 - ratio));
-    const dominio = String(item?.source || item?.meta_url?.hostname || "web").trim();
-
-    return {
-      url: imagen || miniatura,
-      fallbackUrl: imagen && miniatura && miniatura !== imagen ? miniatura : "",
-      fuente: `Brave Search · ${dominio}`.slice(0, 220),
-      titulo: String(item?.title || descripcion).trim().slice(0, 220),
-      marca: producto.marca || "",
-      presentacion: producto.presentacion || "",
-      puntaje: 70 + bonusConfianza + Math.round(cercaniaCuadrado * 7),
-      exacta: false,
-      calidadVerificada: false,
-    };
-  }).filter(Boolean);
-
-  // Limitamos las descargas de candidatos: la búsqueda puede devolver hasta 30,
-  // pero validar demasiadas imágenes hace innecesariamente lenta cada operación.
-  for (const candidato of candidatos.slice(0, 12)) {
-    const valido = await validarCandidato(candidato);
+async function prepararPreviewCandidatos(candidatos = [], limite = 6) {
+  for (const candidato of candidatos.slice(0, Math.max(1, limite))) {
+    const valido = await validarCandidato({
+      ...candidato,
+      puntaje: candidato.puntajePreliminar,
+      exacta: candidato.exactaEAN,
+    });
     if (valido) return valido;
   }
   return null;
@@ -312,8 +183,6 @@ async function buscarImagenProducto(codigo, { guardar = true } = {}) {
   const producto = await obtenerProductoCatalogoAdminDb(codigo);
   if (!producto) throw new Error("Producto no encontrado");
 
-  // P1A: una imagen confirmada y almacenada es definitiva para cualquier
-  // proceso automático. Solo Quitar/Reemplazar manualmente puede modificarla.
   const confirmada = await obtenerImagenCatalogoDb(producto.codigo, "confirmada");
   if (producto.estadoImagen === ESTADOS_IMAGEN.CONFIRMADA && confirmada?.data) {
     return {
@@ -326,9 +195,8 @@ async function buscarImagenProducto(codigo, { guardar = true } = {}) {
   }
 
   if (!guardar) {
-    let candidato = await buscarPorEAN(producto.codigo);
-    if (!candidato) candidato = await buscarBrave(producto);
-    return { producto, candidato };
+    const busqueda = await buscarCandidatosMultiples(producto);
+    return { producto, ...busqueda };
   }
 
   await guardarResultadoImagenCatalogoDb(producto.codigo, {
@@ -339,38 +207,45 @@ async function buscarImagenProducto(codigo, { guardar = true } = {}) {
     candidatoPuntaje: 0,
     candidatoData: null,
     candidatoMime: "",
+    candidatos: [],
     error: "",
   });
 
   try {
-    // P1B ampliará esta capa de búsqueda. P1A deja una sola entrada y una sola
-    // salida de estado para que ninguna fuente escriba directamente en la BD.
-    let candidato = await buscarPorEAN(producto.codigo);
-    if (!candidato) candidato = await buscarBrave(producto);
-
-    if (candidato) {
+    // P1B: las fuentes solo descubren candidatos. Ninguna fuente confirma o
+    // escribe una imagen final. Guardamos la lista completa para la P2.
+    const busqueda = await buscarCandidatosMultiples(producto);
+    if (busqueda.candidatos.length) {
+      // Conservamos una vista previa compatible con el editor actual, pero no
+      // representa una selección definitiva. La P2 puntuará y elegirá sola.
+      const preview = await prepararPreviewCandidatos(busqueda.candidatos);
+      const representativo = preview || busqueda.candidatos[0];
       await guardarResultadoImagenCatalogoDb(producto.codigo, {
         estado: ESTADOS_IMAGEN.CANDIDATO,
-        candidatoUrl: candidato.url,
-        candidatoFuente: candidato.fuente,
-        candidatoTitulo: candidato.titulo,
-        candidatoPuntaje: candidato.puntaje,
-        candidatoData: candidato.normalizada,
-        candidatoMime: candidato.mime || "image/jpeg",
-        error: "",
+        candidatoUrl: representativo.url,
+        candidatoFuente: representativo.fuente,
+        candidatoTitulo: representativo.titulo,
+        candidatoPuntaje: preview ? preview.puntaje : representativo.puntajePreliminar,
+        candidatoData: preview?.normalizada || null,
+        candidatoMime: preview?.mime || "",
+        candidatos: busqueda.candidatos,
+        error: preview ? "" : `${busqueda.candidatos.length} candidatos encontrados; la selección automática se realizará en la P2.`,
       });
       return {
         encontrado: true,
         confirmado: false,
-        candidato,
+        candidato: representativo,
+        candidatos: busqueda.candidatos,
+        cantidadCandidatos: busqueda.candidatos.length,
+        fuentes: busqueda.fuentes,
+        consultas: busqueda.consultas,
         producto: await obtenerProductoCatalogoAdminDb(producto.codigo),
       };
     }
 
-    const braveConfigurado = Boolean(String(process.env.BRAVE_SEARCH_API_KEY || "").trim());
-    const mensaje = braveConfigurado
-      ? "No se encontró una imagen válida para este producto."
-      : "No se encontró una imagen válida por EAN. La búsqueda ampliada requiere BRAVE_SEARCH_API_KEY.";
+    const mensaje = busqueda.braveConfigurado
+      ? "No se encontraron candidatos de imagen para este producto."
+      : "No se encontraron candidatos por EAN. La búsqueda ampliada requiere BRAVE_SEARCH_API_KEY.";
     await guardarResultadoImagenCatalogoDb(producto.codigo, {
       estado: ESTADOS_IMAGEN.SIN_RESULTADO,
       candidatoUrl: "",
@@ -379,19 +254,23 @@ async function buscarImagenProducto(codigo, { guardar = true } = {}) {
       candidatoPuntaje: 0,
       candidatoData: null,
       candidatoMime: "",
+      candidatos: [],
       error: mensaje,
     });
     return {
       encontrado: false,
       confirmado: false,
       candidato: null,
+      candidatos: [],
+      cantidadCandidatos: 0,
       mensaje,
-      requiereConfiguracion: !braveConfigurado,
+      requiereConfiguracion: busqueda.requiereConfiguracion,
       producto: await obtenerProductoCatalogoAdminDb(producto.codigo),
     };
   } catch (error) {
     await guardarResultadoImagenCatalogoDb(producto.codigo, {
       estado: ESTADOS_IMAGEN.ERROR,
+      candidatos: [],
       error: error?.message || "Error inesperado durante la búsqueda de imagen",
     });
     throw error;
@@ -443,6 +322,7 @@ async function importarImagenManual(codigo, url) {
     candidatoPuntaje: 0,
     candidatoData: null,
     candidatoMime: "",
+    candidatos: [],
     error: "",
   }, { forzarConfirmada: true });
   return obtenerProductoCatalogoAdminDb(producto.codigo);

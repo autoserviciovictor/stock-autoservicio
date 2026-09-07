@@ -1,9 +1,10 @@
 const fs=require("fs");
 const assert=require("assert");
 const img=fs.readFileSync("catalogo-imagenes.js","utf8");
+const busqueda=fs.readFileSync("catalogo-imagenes-busqueda.js","utf8");
 const html=fs.readFileSync("index.html","utf8");
 const css=fs.readFileSync("catalogo-admin.css","utf8");
-assert(img.includes("producto fondo blanco solo producto packshot"));
+assert(busqueda.includes("producto packshot fondo blanco envase"));
 assert(img.includes("ESTADOS_IMAGEN.CANDIDATO"));
 assert(!img.includes('estado: "confirmada",\n      candidatoUrl'));
 assert(html.includes("fondo blanco, solo el producto"));

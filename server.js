@@ -1600,6 +1600,22 @@ app.patch("/admin/catalogo/productos/:codigo/visibilidad", requerirAdministrador
   }
 });
 
+app.get("/admin/catalogo/productos/:codigo/imagen/candidatos", requerirAdministrador, async (req, res) => {
+  try {
+    const producto = await obtenerProductoCatalogoAdminDb(req.params.codigo);
+    if (!producto) return res.status(404).json({ ok: false, mensaje: "Producto no encontrado" });
+    res.json({
+      ok: true,
+      codigo: producto.codigo,
+      estadoImagen: producto.estadoImagen,
+      candidatos: Array.isArray(producto.candidatosImagen) ? producto.candidatosImagen : [],
+    });
+  } catch (error) {
+    console.error("Error consultando candidatos de imagen:", error);
+    res.status(500).json({ ok: false, mensaje: error.message || "No se pudieron consultar los candidatos" });
+  }
+});
+
 app.post("/admin/catalogo/productos/:codigo/imagen/buscar", requerirAdministrador, async (req, res) => {
   try {
     const resultado = await buscarImagenProducto(req.params.codigo);

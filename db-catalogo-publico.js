@@ -57,6 +57,7 @@ async function asegurarEsquemaCatalogoPublico() {
       image_mime TEXT NOT NULL DEFAULT '',
       image_candidate_data BYTEA,
       image_candidate_mime TEXT NOT NULL DEFAULT '',
+      image_candidates JSONB NOT NULL DEFAULT '[]'::jsonb,
       image_checked_at TIMESTAMPTZ,
       image_error TEXT NOT NULL DEFAULT '',
       visible BOOLEAN NOT NULL DEFAULT FALSE,
@@ -80,6 +81,7 @@ async function asegurarEsquemaCatalogoPublico() {
     await query(`ALTER TABLE catalog_product_settings ADD COLUMN IF NOT EXISTS image_mime TEXT NOT NULL DEFAULT ''`);
     await query(`ALTER TABLE catalog_product_settings ADD COLUMN IF NOT EXISTS image_candidate_data BYTEA`);
     await query(`ALTER TABLE catalog_product_settings ADD COLUMN IF NOT EXISTS image_candidate_mime TEXT NOT NULL DEFAULT ''`);
+    await query(`ALTER TABLE catalog_product_settings ADD COLUMN IF NOT EXISTS image_candidates JSONB NOT NULL DEFAULT '[]'::jsonb`);
     await query(`ALTER TABLE catalog_product_settings ADD COLUMN IF NOT EXISTS image_checked_at TIMESTAMPTZ`);
     await query(`ALTER TABLE catalog_product_settings ADD COLUMN IF NOT EXISTS image_error TEXT NOT NULL DEFAULT ''`);
     // Migración P1A: consolidamos los estados históricos en un único ciclo de vida.
@@ -531,6 +533,7 @@ async function listarProductosCatalogoAdminDb(opciones = {}) {
            COALESCE(s.image_candidate_source,'') AS image_candidate_source,
            COALESCE(s.image_candidate_title,'') AS image_candidate_title,
            COALESCE(s.image_candidate_score,0) AS image_candidate_score,
+           COALESCE(s.image_candidates,'[]'::jsonb) AS image_candidates,
            s.image_checked_at, COALESCE(s.image_error,'') AS image_error,
            COALESCE(s.visible,FALSE) AS visible,
            COALESCE(s.featured,FALSE) AS featured,
@@ -565,6 +568,7 @@ async function listarProductosCatalogoAdminDb(opciones = {}) {
       candidatoFuente: String(f.image_candidate_source || ""),
       candidatoTitulo: String(f.image_candidate_title || ""),
       candidatoPuntaje: Number(f.image_candidate_score) || 0,
+      candidatosImagen: Array.isArray(f.image_candidates) ? f.image_candidates : [],
       imagenRevisadaEn: f.image_checked_at || null,
       errorImagen: String(f.image_error || ""),
       visible: Boolean(f.visible),
@@ -592,6 +596,7 @@ async function obtenerProductoCatalogoAdminDb(codigo) {
            COALESCE(s.image_candidate_source,'') AS image_candidate_source,
            COALESCE(s.image_candidate_title,'') AS image_candidate_title,
            COALESCE(s.image_candidate_score,0) AS image_candidate_score,
+           COALESCE(s.image_candidates,'[]'::jsonb) AS image_candidates,
            s.image_checked_at, COALESCE(s.image_error,'') AS image_error,
            COALESCE(s.visible,FALSE) AS visible,
            COALESCE(s.featured,FALSE) AS featured,
@@ -725,7 +730,8 @@ async function guardarResultadoImagenCatalogoDb(codigo, datos = {}, opciones = {
       || datos.candidatoTitulo !== undefined
       || datos.candidatoPuntaje !== undefined
       || datos.candidatoData !== undefined
-      || datos.candidatoMime !== undefined;
+      || datos.candidatoMime !== undefined
+      || datos.candidatos !== undefined;
     if (intentaModificarConfirmada) {
       throw new Error("La imagen confirmada está protegida y no puede ser sobrescrita automáticamente");
     }
@@ -736,9 +742,9 @@ async function guardarResultadoImagenCatalogoDb(codigo, datos = {}, opciones = {
     INSERT INTO catalog_product_settings(
       code, category_id, brand, presentation, sale_unit,
       image_url, image_source, image_status, image_data, image_mime,
-      image_candidate_url, image_candidate_source, image_candidate_title, image_candidate_score, image_candidate_data, image_candidate_mime,
+      image_candidate_url, image_candidate_source, image_candidate_title, image_candidate_score, image_candidate_data, image_candidate_mime, image_candidates,
       image_checked_at, image_error, visible, featured, sort_order, updated_at
-    ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,NOW(),$17,$18,$19,$20,NOW())
+    ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17::jsonb,NOW(),$18,$19,$20,$21,NOW())
     ON CONFLICT(code) DO UPDATE SET
       image_url=EXCLUDED.image_url,
       image_source=EXCLUDED.image_source,
@@ -751,6 +757,7 @@ async function guardarResultadoImagenCatalogoDb(codigo, datos = {}, opciones = {
       image_candidate_score=EXCLUDED.image_candidate_score,
       image_candidate_data=EXCLUDED.image_candidate_data,
       image_candidate_mime=EXCLUDED.image_candidate_mime,
+      image_candidates=EXCLUDED.image_candidates,
       image_checked_at=NOW(),
       image_error=EXCLUDED.image_error,
       updated_at=NOW()
@@ -771,6 +778,7 @@ async function guardarResultadoImagenCatalogoDb(codigo, datos = {}, opciones = {
     datos.candidatoPuntaje === undefined ? Number(s.image_candidate_score) || 0 : enteroEnRango(datos.candidatoPuntaje, 0, 100, 0),
     datos.candidatoData === undefined ? (s.image_candidate_data || null) : (datos.candidatoData || null),
     datos.candidatoMime === undefined ? String(s.image_candidate_mime || "") : textoLimitado(datos.candidatoMime, 80),
+    JSON.stringify(datos.candidatos === undefined ? (Array.isArray(s.image_candidates) ? s.image_candidates : []) : (Array.isArray(datos.candidatos) ? datos.candidatos.slice(0, 24) : [])),
     datos.error === undefined ? String(s.image_error || "") : textoLimitado(datos.error, 500),
     Boolean(s.visible),
     Boolean(s.featured),
@@ -796,6 +804,7 @@ async function confirmarCandidatoImagenCatalogoDb(codigo) {
     candidatoPuntaje: 0,
     candidatoData: null,
     candidatoMime: "",
+    candidatos: [],
     error: "",
   });
 }
@@ -827,6 +836,7 @@ async function quitarImagenCatalogoDb(codigo) {
     imagenMime: "",
     candidatoData: null,
     candidatoMime: "",
+    candidatos: [],
     error: "",
   }, { forzarConfirmada: true });
 }
