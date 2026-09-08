@@ -357,12 +357,59 @@ function htmlHojaPreparacionPedido(p) {
 function imprimirPedidoCatalogo() {
   const p = estado.pedidoAbierto;
   if (!p) return mensaje("Abrí un pedido antes de imprimir.");
-  const ventana = window.open("", "_blank", "width=900,height=760");
-  if (!ventana) return mensaje("El navegador bloqueó la ventana de impresión. Habilitá las ventanas emergentes.");
-  ventana.document.open(); ventana.document.write(htmlHojaPreparacionPedido(p)); ventana.document.close(); ventana.focus();
-  const lanzar = () => { try { ventana.print(); } catch {} };
-  if (ventana.document.readyState === "complete") setTimeout(lanzar,150);
-  else ventana.addEventListener("load",()=>setTimeout(lanzar,150),{once:true});
+
+  document.getElementById("catalogPedidoPrintFrame")?.remove();
+
+  const iframe = document.createElement("iframe");
+  iframe.id = "catalogPedidoPrintFrame";
+  iframe.setAttribute("aria-hidden", "true");
+  Object.assign(iframe.style, {
+    position: "fixed",
+    width: "0",
+    height: "0",
+    border: "0",
+    opacity: "0",
+    pointerEvents: "none",
+    right: "0",
+    bottom: "0",
+  });
+  document.body.appendChild(iframe);
+
+  const documento = iframe.contentDocument || iframe.contentWindow?.document;
+  const ventana = iframe.contentWindow;
+
+  if (!documento || !ventana) {
+    iframe.remove();
+    mensaje("No se pudo preparar la impresión.");
+    return;
+  }
+
+  documento.open();
+  documento.write(htmlHojaPreparacionPedido(p));
+  documento.close();
+
+  let eliminado = false;
+  const limpiar = () => {
+    if (eliminado) return;
+    eliminado = true;
+    setTimeout(() => iframe.remove(), 150);
+  };
+
+  ventana.addEventListener("afterprint", limpiar, { once: true });
+
+  const lanzar = () => {
+    try {
+      ventana.focus();
+      ventana.print();
+      setTimeout(limpiar, 15000);
+    } catch {
+      limpiar();
+      mensaje("No se pudo abrir la configuración de impresión.");
+    }
+  };
+
+  if (documento.readyState === "complete") setTimeout(lanzar, 120);
+  else ventana.addEventListener("load", () => setTimeout(lanzar, 120), { once: true });
 }
 
 function renderObservacionesPedido(p) {
