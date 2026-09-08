@@ -294,6 +294,43 @@ function renderPaginacionPedidos() {
   }));
 }
 
+function descripcionMovimientoPedido(movimiento) {
+  const estadoNuevo = etiquetaEstadoPedido(movimiento.estado);
+  if (!movimiento.estadoAnterior) return `Pedido recibido · ${estadoNuevo}`;
+  return `${etiquetaEstadoPedido(movimiento.estadoAnterior)} → ${estadoNuevo}`;
+}
+
+function renderHistorialPedido(historial = []) {
+  const cont = $("catalogPedidoHistorial");
+  if (!cont) return;
+  if (!Array.isArray(historial) || !historial.length) {
+    cont.innerHTML = '<div class="catalog-order-history-empty">Sin movimientos registrados.</div>';
+    return;
+  }
+
+  cont.innerHTML = historial.slice().reverse().map((mov, indice) => {
+    const actor = mov.origen === "catalogo"
+      ? "Catálogo online"
+      : (mov.nombre || mov.usuario || "Administrador");
+    const detalleActor = mov.origen === "catalogo"
+      ? "Pedido creado por el cliente"
+      : [mov.usuario && mov.usuario !== actor ? mov.usuario : "", mov.rol].filter(Boolean).join(" · ");
+
+    return `
+      <article class="catalog-order-history-item ${indice === 0 ? "is-latest" : ""}">
+        <span class="catalog-order-history-dot" aria-hidden="true"></span>
+        <div class="catalog-order-history-content">
+          <div class="catalog-order-history-top">
+            <strong>${esc(descripcionMovimientoPedido(mov))}</strong>
+            <time>${fechaHora(mov.creadoEn)}</time>
+          </div>
+          <span>${esc(actor)}</span>
+          ${detalleActor ? `<small>${esc(detalleActor)}</small>` : ""}
+        </div>
+      </article>`;
+  }).join("");
+}
+
 async function abrirPedido(numeroPedido) {
   const data = await api(`/admin/catalogo/pedidos/${encodeURIComponent(numeroPedido)}`);
   const p = data.pedido;
@@ -313,6 +350,7 @@ async function abrirPedido(numeroPedido) {
   $("catalogPedidoEstado").value = p.estado;
   $("catalogPedidoItemsResumen").textContent = `${numero(p.unidades)} unidades · ${numero(p.productos)} productos`;
   $("catalogPedidoTotal").textContent = moneda(p.total);
+  renderHistorialPedido(p.historial || []);
 
   $("catalogPedidoItems").innerHTML = (p.items || []).map((item) => `
     <div class="catalog-order-item">

@@ -81,6 +81,30 @@ async function asegurarEsquemaCatalogoPedidos() {
     )`);
     await query(`CREATE INDEX IF NOT EXISTS catalog_order_items_order_idx ON catalog_order_items(order_id, order_item_id)`);
 
+    await query(`CREATE TABLE IF NOT EXISTS catalog_order_status_history (
+      history_id BIGSERIAL PRIMARY KEY,
+      order_id BIGINT NOT NULL REFERENCES catalog_orders(order_id) ON DELETE CASCADE,
+      previous_status TEXT NOT NULL DEFAULT '',
+      new_status TEXT NOT NULL,
+      actor_user TEXT NOT NULL DEFAULT '',
+      actor_name TEXT NOT NULL DEFAULT '',
+      actor_role TEXT NOT NULL DEFAULT '',
+      source TEXT NOT NULL DEFAULT 'admin',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      CONSTRAINT catalog_order_status_history_new_valid CHECK (new_status IN ('recibido','preparando','listo','entregado','cancelado'))
+    )`);
+    await query(`CREATE INDEX IF NOT EXISTS catalog_order_status_history_order_idx
+      ON catalog_order_status_history(order_id, created_at, history_id)`);
+
+    await query(`INSERT INTO catalog_order_status_history(
+        order_id, previous_status, new_status, actor_user, actor_name, actor_role, source, created_at
+      )
+      SELECT o.order_id, '', 'recibido', 'catalogo', 'Catálogo online', 'sistema', 'catalogo', o.created_at
+        FROM catalog_orders o
+       WHERE NOT EXISTS (
+         SELECT 1 FROM catalog_order_status_history h WHERE h.order_id=o.order_id
+       )`);
+
     esquemaAsegurado = true;
   })();
 
@@ -240,6 +264,13 @@ async function crearPedidoCatalogoDb(pedido = {}) {
       );
     }
 
+    await cliente.query(
+      `INSERT INTO catalog_order_status_history(
+        order_id, previous_status, new_status, actor_user, actor_name, actor_role, source, created_at
+      ) VALUES($1,'','recibido','catalogo','Catálogo online','sistema','catalogo',$2)`,
+      [orderId, ins.rows[0].created_at],
+    );
+
     await cliente.query("COMMIT");
     return {
       id: orderId,
@@ -379,6 +410,14 @@ async function obtenerPedidoCatalogoAdminDb(numero) {
     [f.order_id],
   );
 
+  const historial = await query(
+    `SELECT history_id,previous_status,new_status,actor_user,actor_name,actor_role,source,created_at
+       FROM catalog_order_status_history
+      WHERE order_id=$1
+      ORDER BY created_at ASC, history_id ASC`,
+    [f.order_id],
+  );
+
   return {
     id: Number(f.order_id),
     numero: String(f.order_number),
@@ -404,10 +443,20 @@ async function obtenerPedidoCatalogoAdminDb(numero) {
       total: Number(i.line_total) || 0,
       unidadVenta: String(i.sale_unit || "unidad"),
     })),
+    historial: historial.rows.map((h) => ({
+      id: Number(h.history_id),
+      estadoAnterior: String(h.previous_status || ""),
+      estado: String(h.new_status || ""),
+      usuario: String(h.actor_user || ""),
+      nombre: String(h.actor_name || ""),
+      rol: String(h.actor_role || ""),
+      origen: String(h.source || "admin"),
+      creadoEn: h.created_at,
+    })),
   };
 }
 
-async function actualizarEstadoPedidoCatalogoDb(numero, estado) {
+async function actualizarEstadoPedidoCatalogoDb(numero, estado, actor = {}) {
   await asegurarEsquemaCatalogoPedidos();
   const n = texto(numero, 40);
   const e = texto(estado, 30).toLowerCase();
@@ -416,15 +465,46 @@ async function actualizarEstadoPedidoCatalogoDb(numero, estado) {
     throw Object.assign(new Error("Estado de pedido inválido"), { status: 400 });
   }
 
-  const r = await query(
-    `UPDATE catalog_orders
-        SET status=$2, updated_at=NOW()
-      WHERE order_number=$1
-      RETURNING order_id`,
-    [n, e],
-  );
-  if (!r.rowCount) throw Object.assign(new Error("Pedido no encontrado"), { status: 404 });
-  return obtenerPedidoCatalogoAdminDb(n);
+  const actorUser = texto(actor.usuario, 80) || "administrador";
+  const actorName = texto(actor.nombre, 120) || actorUser;
+  const actorRole = texto(actor.rol, 40) || "administrador";
+
+  const pool = obtenerPool();
+  const cliente = await pool.connect();
+  try {
+    await cliente.query("BEGIN");
+    const actual = await cliente.query(
+      `SELECT order_id,status FROM catalog_orders WHERE order_number=$1 FOR UPDATE`,
+      [n],
+    );
+    if (!actual.rowCount) {
+      throw Object.assign(new Error("Pedido no encontrado"), { status: 404 });
+    }
+
+    const orderId = Number(actual.rows[0].order_id);
+    const anterior = String(actual.rows[0].status || "");
+
+    if (anterior !== e) {
+      await cliente.query(
+        `UPDATE catalog_orders SET status=$2, updated_at=NOW() WHERE order_id=$1`,
+        [orderId, e],
+      );
+      await cliente.query(
+        `INSERT INTO catalog_order_status_history(
+          order_id, previous_status, new_status, actor_user, actor_name, actor_role, source
+        ) VALUES($1,$2,$3,$4,$5,$6,'admin')`,
+        [orderId, anterior, e, actorUser, actorName, actorRole],
+      );
+    }
+
+    await cliente.query("COMMIT");
+    return obtenerPedidoCatalogoAdminDb(n);
+  } catch (error) {
+    await cliente.query("ROLLBACK");
+    throw error;
+  } finally {
+    cliente.release();
+  }
 }
 
 async function obtenerResumenPedidosCatalogoDb() {

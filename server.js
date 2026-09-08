@@ -1601,7 +1601,11 @@ app.get("/admin/catalogo/pedidos/:numero", requerirAdministrador, async (req, re
 
 app.patch("/admin/catalogo/pedidos/:numero/estado", requerirAdministrador, async (req, res) => {
   try {
-    const pedido = await actualizarEstadoPedidoCatalogoDb(req.params.numero, req.body?.estado);
+    const pedido = await actualizarEstadoPedidoCatalogoDb(
+      req.params.numero,
+      req.body?.estado,
+      req.admin || req.usuario || {},
+    );
     res.json({ ok: true, pedido });
   } catch (error) {
     console.error("Error actualizando estado de pedido:", error);
