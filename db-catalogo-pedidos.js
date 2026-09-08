@@ -79,6 +79,9 @@ async function asegurarEsquemaCatalogoPedidos() {
       CONSTRAINT catalog_order_items_quantity_valid CHECK (quantity BETWEEN 1 AND 999),
       CONSTRAINT catalog_order_items_price_nonnegative CHECK (unit_price >= 0 AND line_total >= 0)
     )`);
+    await query(`ALTER TABLE catalog_orders
+      ADD COLUMN IF NOT EXISTS internal_notes TEXT NOT NULL DEFAULT ''`);
+
     await query(`CREATE INDEX IF NOT EXISTS catalog_order_items_order_idx ON catalog_order_items(order_id, order_item_id)`);
 
     await query(`CREATE TABLE IF NOT EXISTS catalog_order_status_history (
@@ -351,7 +354,7 @@ async function listarPedidosCatalogoDb({ pagina = 1, limite = 50, estado = "", b
   const r = await query(
     `SELECT o.order_id,o.order_number,o.customer_name,o.customer_phone,o.delivery_type,
             o.delivery_address,o.delivery_reference,o.delivery_time,o.payment_method,o.status,
-            o.total,o.item_units,o.item_lines,o.whatsapp_opened,o.created_at,o.updated_at
+            o.total,o.item_units,o.item_lines,o.whatsapp_opened,o.internal_notes,o.created_at,o.updated_at
        FROM catalog_orders o
        ${sqlWhere}
       ORDER BY o.created_at DESC
@@ -393,7 +396,7 @@ async function obtenerPedidoCatalogoAdminDb(numero) {
   const cab = await query(
     `SELECT o.order_id,o.order_number,o.customer_name,o.customer_phone,o.delivery_type,
             o.delivery_address,o.delivery_reference,o.delivery_time,o.payment_method,o.status,
-            o.total,o.item_units,o.item_lines,o.whatsapp_opened,o.created_at,o.updated_at
+            o.total,o.item_units,o.item_lines,o.whatsapp_opened,o.internal_notes,o.created_at,o.updated_at
        FROM catalog_orders o
       WHERE o.order_number=$1
       LIMIT 1`,
@@ -433,6 +436,7 @@ async function obtenerPedidoCatalogoAdminDb(numero) {
     unidades: Number(f.item_units) || 0,
     productos: Number(f.item_lines) || 0,
     whatsappAbierto: Boolean(f.whatsapp_opened),
+    observacionesInternas: String(f.internal_notes || ""),
     creadoEn: f.created_at,
     actualizadoEn: f.updated_at,
     items: items.rows.map((i) => ({
@@ -477,18 +481,12 @@ async function actualizarEstadoPedidoCatalogoDb(numero, estado, actor = {}) {
       `SELECT order_id,status FROM catalog_orders WHERE order_number=$1 FOR UPDATE`,
       [n],
     );
-    if (!actual.rowCount) {
-      throw Object.assign(new Error("Pedido no encontrado"), { status: 404 });
-    }
+    if (!actual.rowCount) throw Object.assign(new Error("Pedido no encontrado"), { status: 404 });
 
     const orderId = Number(actual.rows[0].order_id);
     const anterior = String(actual.rows[0].status || "");
-
     if (anterior !== e) {
-      await cliente.query(
-        `UPDATE catalog_orders SET status=$2, updated_at=NOW() WHERE order_id=$1`,
-        [orderId, e],
-      );
+      await cliente.query(`UPDATE catalog_orders SET status=$2, updated_at=NOW() WHERE order_id=$1`, [orderId, e]);
       await cliente.query(
         `INSERT INTO catalog_order_status_history(
           order_id, previous_status, new_status, actor_user, actor_name, actor_role, source
@@ -496,7 +494,6 @@ async function actualizarEstadoPedidoCatalogoDb(numero, estado, actor = {}) {
         [orderId, anterior, e, actorUser, actorName, actorRole],
       );
     }
-
     await cliente.query("COMMIT");
     return obtenerPedidoCatalogoAdminDb(n);
   } catch (error) {
@@ -505,6 +502,28 @@ async function actualizarEstadoPedidoCatalogoDb(numero, estado, actor = {}) {
   } finally {
     cliente.release();
   }
+}
+
+async function actualizarObservacionesPedidoCatalogoDb(numero, observaciones = "") {
+  await asegurarEsquemaCatalogoPedidos();
+
+  const n = texto(numero, 40);
+  if (!n) throw Object.assign(new Error("Pedido inválido"), { status: 400 });
+
+  const notas = texto(observaciones, 1000);
+  const r = await query(
+    `UPDATE catalog_orders
+        SET internal_notes=$2, updated_at=NOW()
+      WHERE order_number=$1
+      RETURNING order_id`,
+    [n, notas],
+  );
+
+  if (!r.rowCount) {
+    throw Object.assign(new Error("Pedido no encontrado"), { status: 404 });
+  }
+
+  return obtenerPedidoCatalogoAdminDb(n);
 }
 
 async function obtenerResumenPedidosCatalogoDb() {
@@ -549,5 +568,6 @@ module.exports = {
   listarPedidosCatalogoDb,
   obtenerPedidoCatalogoAdminDb,
   actualizarEstadoPedidoCatalogoDb,
+  actualizarObservacionesPedidoCatalogoDb,
   obtenerResumenPedidosCatalogoDb,
 };

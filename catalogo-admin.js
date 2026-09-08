@@ -20,6 +20,7 @@ const estado = {
   pedidosTotal: 0,
   pedidos: [],
   pedidoAbierto: null,
+  pedidoObservacionesSucias: false,
   pedidosBusquedaTimer: null,
 };
 
@@ -307,28 +308,101 @@ function renderHistorialPedido(historial = []) {
     cont.innerHTML = '<div class="catalog-order-history-empty">Sin movimientos registrados.</div>';
     return;
   }
-
   cont.innerHTML = historial.slice().reverse().map((mov, indice) => {
-    const actor = mov.origen === "catalogo"
-      ? "Catálogo online"
-      : (mov.nombre || mov.usuario || "Administrador");
+    const actor = mov.origen === "catalogo" ? "Catálogo online" : (mov.nombre || mov.usuario || "Administrador");
     const detalleActor = mov.origen === "catalogo"
       ? "Pedido creado por el cliente"
       : [mov.usuario && mov.usuario !== actor ? mov.usuario : "", mov.rol].filter(Boolean).join(" · ");
-
-    return `
-      <article class="catalog-order-history-item ${indice === 0 ? "is-latest" : ""}">
-        <span class="catalog-order-history-dot" aria-hidden="true"></span>
-        <div class="catalog-order-history-content">
-          <div class="catalog-order-history-top">
-            <strong>${esc(descripcionMovimientoPedido(mov))}</strong>
-            <time>${fechaHora(mov.creadoEn)}</time>
-          </div>
-          <span>${esc(actor)}</span>
-          ${detalleActor ? `<small>${esc(detalleActor)}</small>` : ""}
-        </div>
-      </article>`;
+    return `<article class="catalog-order-history-item ${indice === 0 ? "is-latest" : ""}">
+      <span class="catalog-order-history-dot" aria-hidden="true"></span>
+      <div class="catalog-order-history-content">
+        <div class="catalog-order-history-top"><strong>${esc(descripcionMovimientoPedido(mov))}</strong><time>${fechaHora(mov.creadoEn)}</time></div>
+        <span>${esc(actor)}</span>${detalleActor ? `<small>${esc(detalleActor)}</small>` : ""}
+      </div>
+    </article>`;
   }).join("");
+}
+
+function htmlHojaPreparacionPedido(p) {
+  const entrega = p.entrega === "delivery" ? `Delivery · ${esc(p.horario || "A confirmar")}` : "Retiro";
+  const direccion = p.entrega === "delivery"
+    ? [p.direccion, p.referencia].filter(Boolean).map(esc).join(" · ")
+    : "Retiro en Autoservicio Victor";
+  const productos = (p.items || []).map((item) => `
+    <tr><td class="check-cell"><span class="print-check"></span></td><td class="qty-cell">${numero(item.cantidad)}</td>
+    <td><strong>${esc(item.nombre)}</strong><small>${esc(item.codigo)} · ${esc(item.unidadVenta || "unidad")}</small></td>
+    <td class="price-cell">${moneda(item.precio)}</td><td class="price-cell">${moneda(item.total)}</td></tr>`).join("");
+
+  return `<!doctype html><html lang="es"><head><meta charset="utf-8"><title>${esc(p.numero)} · Autoservicio Victor</title>
+  <style>
+  @page{size:A4;margin:12mm}*{box-sizing:border-box}body{margin:0;color:#111;font-family:Arial,Helvetica,sans-serif;font-size:12px}
+  .header{display:flex;justify-content:space-between;gap:20px;padding-bottom:10px;border-bottom:3px solid #e30613}
+  .brand small{display:block;font-size:9px;font-weight:700;letter-spacing:.12em}.brand h1{margin:2px 0 0;color:#e30613;font-size:24px}
+  .order-title{text-align:right}.order-title small{display:block;color:#555;font-size:9px;text-transform:uppercase;letter-spacing:.1em}.order-title strong{display:block;margin-top:3px;font-size:18px}
+  .section{margin-top:14px}.section-title{margin:0 0 7px;padding-bottom:5px;border-bottom:1px solid #222;font-size:11px;text-transform:uppercase;letter-spacing:.06em}
+  .info-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px 18px}.info-item span{display:block;color:#666;font-size:9px;text-transform:uppercase}.info-item strong{display:block;margin-top:2px}.full{grid-column:1/-1}
+  table{width:100%;border-collapse:collapse}th{padding:7px 5px;border-bottom:2px solid #111;font-size:9px;text-align:left;text-transform:uppercase}td{padding:8px 5px;border-bottom:1px solid #bbb;vertical-align:middle}td small{display:block;margin-top:2px;color:#666;font-size:9px}
+  .check-cell{width:26px;text-align:center}.qty-cell{width:52px;text-align:center;font-size:14px;font-weight:800}.price-cell{width:88px;text-align:right;white-space:nowrap}.print-check{display:inline-block;width:15px;height:15px;border:1.5px solid #111;border-radius:2px}
+  .total{display:flex;justify-content:flex-end;gap:18px;margin-top:10px;font-size:15px}.total strong{min-width:120px;text-align:right}
+  .work-grid{display:grid;grid-template-columns:1fr 1fr;gap:28px;margin-top:28px}.signature{min-height:58px;padding-top:38px;border-bottom:1px solid #111}.signature-label{margin-top:5px;font-size:10px;text-align:center;font-weight:700}.notes{min-height:68px;margin-top:14px;padding:8px;border:1px solid #888}.footer{margin-top:14px;padding-top:7px;border-top:1px solid #aaa;color:#555;font-size:9px;text-align:center}
+  </style></head><body><main>
+  <header class="header"><div class="brand"><small>AUTOSERVICIO</small><h1>Victor</h1></div><div class="order-title"><small>Hoja de preparación</small><strong>${esc(p.numero)}</strong><span>${esc(fechaHora(p.creadoEn))}</span></div></header>
+  <section class="section"><h2 class="section-title">Datos del cliente</h2><div class="info-grid"><div class="info-item"><span>Cliente</span><strong>${esc(p.cliente)}</strong></div><div class="info-item"><span>Teléfono</span><strong>${esc(p.telefono)}</strong></div></div></section>
+  <section class="section"><h2 class="section-title">Datos del pedido</h2><div class="info-grid"><div class="info-item"><span>Entrega</span><strong>${entrega}</strong></div><div class="info-item"><span>Forma de pago</span><strong>${esc(p.pago)}</strong></div><div class="info-item full"><span>Dirección / referencia</span><strong>${direccion}</strong></div><div class="info-item"><span>Estado</span><strong>${esc(etiquetaEstadoPedido(p.estado))}</strong></div><div class="info-item"><span>Productos / unidades</span><strong>${numero(p.productos)} productos · ${numero(p.unidades)} unidades</strong></div></div></section>
+  <section class="section"><h2 class="section-title">Preparación de productos</h2><table><thead><tr><th>OK</th><th>Cant.</th><th>Producto</th><th>Precio</th><th>Subtotal</th></tr></thead><tbody>${productos}</tbody></table><div class="total"><span>Total</span><strong>${moneda(p.total)}</strong></div></section>
+  <section class="section"><h2 class="section-title">Control interno</h2><div class="work-grid"><div><div class="signature"></div><div class="signature-label">Armó pedido</div></div><div><div class="signature"></div><div class="signature-label">Controló</div></div></div><div class="notes"><strong>Observaciones:</strong>${p.observacionesInternas ? `<div style="margin-top:6px">${esc(p.observacionesInternas)}</div>` : ""}</div></section>
+  <footer class="footer">Autoservicio Victor · Brindamos calidad y atención.</footer></main></body></html>`;
+}
+
+function imprimirPedidoCatalogo() {
+  const p = estado.pedidoAbierto;
+  if (!p) return mensaje("Abrí un pedido antes de imprimir.");
+  const ventana = window.open("", "_blank", "width=900,height=760");
+  if (!ventana) return mensaje("El navegador bloqueó la ventana de impresión. Habilitá las ventanas emergentes.");
+  ventana.document.open(); ventana.document.write(htmlHojaPreparacionPedido(p)); ventana.document.close(); ventana.focus();
+  const lanzar = () => { try { ventana.print(); } catch {} };
+  if (ventana.document.readyState === "complete") setTimeout(lanzar,150);
+  else ventana.addEventListener("load",()=>setTimeout(lanzar,150),{once:true});
+}
+
+function renderObservacionesPedido(p) {
+  const campo = $("catalogPedidoObservaciones");
+  const estadoTexto = $("catalogPedidoObservacionesEstado");
+  if (!campo || !estadoTexto) return;
+
+  campo.value = p.observacionesInternas || "";
+  estado.pedidoObservacionesSucias = false;
+  estadoTexto.textContent = "Sin cambios pendientes.";
+
+  campo.oninput = () => {
+    estado.pedidoObservacionesSucias = true;
+    estadoTexto.textContent = "Hay cambios sin guardar.";
+  };
+}
+
+async function guardarObservacionesPedido() {
+  const p = estado.pedidoAbierto;
+  if (!p) return;
+
+  const boton = $("catalogPedidoGuardarObservaciones");
+  boton.disabled = true;
+
+  try {
+    const data = await api(`/admin/catalogo/pedidos/${encodeURIComponent(p.numero)}/observaciones`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        observaciones: $("catalogPedidoObservaciones").value.trim(),
+      }),
+    });
+
+    estado.pedidoAbierto = data.pedido;
+    renderObservacionesPedido(data.pedido);
+    mensaje(`Observaciones de ${p.numero} guardadas.`, "ok");
+  } catch (e) {
+    mensaje(e.message);
+  } finally {
+    boton.disabled = false;
+  }
 }
 
 async function abrirPedido(numeroPedido) {
@@ -350,6 +424,7 @@ async function abrirPedido(numeroPedido) {
   $("catalogPedidoEstado").value = p.estado;
   $("catalogPedidoItemsResumen").textContent = `${numero(p.unidades)} unidades · ${numero(p.productos)} productos`;
   $("catalogPedidoTotal").textContent = moneda(p.total);
+  renderObservacionesPedido(p);
   renderHistorialPedido(p.historial || []);
 
   $("catalogPedidoItems").innerHTML = (p.items || []).map((item) => `
@@ -803,6 +878,8 @@ function bind() {
   $("catalogPedidosFiltroEstado")?.addEventListener("change", () => cargarPedidos({ conservarPagina: false }).catch((e) => mensaje(e.message)));
   $("catalogPedidosRecargar")?.addEventListener("click", () => Promise.all([cargarPedidos(), cargarResumenPedidos()]).catch((e) => mensaje(e.message)));
   $("catalogPedidoGuardarEstado")?.addEventListener("click", guardarEstadoPedido);
+  $("catalogPedidoImprimir")?.addEventListener("click", imprimirPedidoCatalogo);
+  $("catalogPedidoGuardarObservaciones")?.addEventListener("click", guardarObservacionesPedido);
   $("catalogPedidoCerrar")?.addEventListener("click", () => cerrarModal("catalogPedidoModal"));
   $("catalogBtnVerPublico")?.addEventListener("click", () => window.open(new URL("./catalogo/", location.href).href, "_blank", "noopener"));
   $("catalogBtnNuevoRubro")?.addEventListener("click", () => abrirRubro());

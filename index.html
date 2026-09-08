@@ -41,6 +41,8 @@
     <link rel="stylesheet" href="catalogo-admin.css?v=1960-d21-cierre-etapa6-010926" />
     <link rel="stylesheet" href="catalogo-etapa7.css?v=1960-d21-cierre-etapa6-010926" />
     <link rel="stylesheet" href="catalogo-etapa8a.css?v=1960-d21-cierre-etapa6-010926" />
+    <link rel="stylesheet" href="catalogo-etapa8b.css?v=1960-d21-cierre-etapa6-010926" />
+    <link rel="stylesheet" href="catalogo-etapa8c.css?v=1960-d21-cierre-etapa6-010926" />
     <link rel="stylesheet" href="login-redesign.css?v=1960-d21-cierre-etapa6-010926" />
     <link rel="stylesheet" href="settings-user.css?v=1960-d21-cierre-etapa6-010926" />
     <link rel="stylesheet" href="ui-unification.css?v=1960-d21-cierre-etapa6-010926" />
@@ -3349,7 +3351,12 @@
               <span class="catalog-modal-icon"><svg class="app-icon"><use href="#icon-box"></use></svg></span>
               <div><span>PEDIDO DEL CATÁLOGO</span><h2 id="catalogPedidoModalTitulo">Detalle del pedido</h2><p id="catalogPedidoModalNumero">—</p></div>
             </div>
-            <button id="catalogPedidoCerrar" class="modal-close" type="button" aria-label="Cerrar"><svg class="app-icon"><use href="#icon-close"></use></svg></button>
+            <div class="catalog-order-modal-actions">
+              <button id="catalogPedidoImprimir" class="catalog-btn catalog-btn-secondary catalog-order-print-btn" type="button">
+                <span aria-hidden="true">🖨</span><span>Imprimir pedido</span>
+              </button>
+              <button id="catalogPedidoCerrar" class="modal-close" type="button" aria-label="Cerrar"><svg class="app-icon"><use href="#icon-close"></use></svg></button>
+            </div>
           </header>
           <div class="catalog-modal-body catalog-order-modal-body">
             <section class="catalog-order-detail-grid">
@@ -3377,6 +3384,24 @@
               <header><strong>Productos</strong><span id="catalogPedidoItemsResumen">—</span></header>
               <div id="catalogPedidoItems" class="catalog-order-items"></div>
               <footer><span>Total</span><strong id="catalogPedidoTotal">—</strong></footer>
+            </section>
+
+            <section class="catalog-order-notes-card">
+              <header>
+                <div>
+                  <strong>Observaciones internas</strong>
+                  <span>Notas para el equipo sobre este pedido.</span>
+                </div>
+              </header>
+
+              <label class="catalog-field catalog-order-notes-field">
+                <textarea id="catalogPedidoObservaciones" rows="4" maxlength="1000" placeholder="Faltantes, reemplazos, aclaraciones del cliente o indicaciones internas..."></textarea>
+              </label>
+
+              <footer>
+                <span id="catalogPedidoObservacionesEstado">Sin cambios pendientes.</span>
+                <button id="catalogPedidoGuardarObservaciones" class="catalog-btn catalog-btn-primary" type="button">Guardar observaciones</button>
+              </footer>
             </section>
 
             <section class="catalog-order-history-card">

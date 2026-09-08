@@ -85,6 +85,7 @@ const {
   listarPedidosCatalogoDb,
   obtenerPedidoCatalogoAdminDb,
   actualizarEstadoPedidoCatalogoDb,
+  actualizarObservacionesPedidoCatalogoDb,
   obtenerResumenPedidosCatalogoDb,
 } = require("./db-catalogo-pedidos");
 const { buscarImagenProducto, obtenerImagenNormalizadaProducto, importarImagenManual } = require("./catalogo-imagenes");
@@ -1610,6 +1611,23 @@ app.patch("/admin/catalogo/pedidos/:numero/estado", requerirAdministrador, async
   } catch (error) {
     console.error("Error actualizando estado de pedido:", error);
     res.status(error.status || 400).json({ ok: false, mensaje: error.message || "No se pudo actualizar el estado" });
+  }
+});
+
+
+app.patch("/admin/catalogo/pedidos/:numero/observaciones", requerirAdministrador, async (req, res) => {
+  try {
+    const pedido = await actualizarObservacionesPedidoCatalogoDb(
+      req.params.numero,
+      req.body?.observaciones || "",
+    );
+    res.json({ ok: true, pedido });
+  } catch (error) {
+    console.error("Error actualizando observaciones del pedido:", error);
+    res.status(error.status || 400).json({
+      ok: false,
+      mensaje: error.message || "No se pudieron guardar las observaciones",
+    });
   }
 });
 
