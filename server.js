@@ -86,6 +86,8 @@ const {
   obtenerPedidoCatalogoAdminDb,
   actualizarEstadoPedidoCatalogoDb,
   actualizarObservacionesPedidoCatalogoDb,
+  archivarPedidosDiasAnterioresDb,
+  eliminarPedidoArchivadoCatalogoDb,
   obtenerResumenPedidosCatalogoDb,
 } = require("./db-catalogo-pedidos");
 const { buscarImagenProducto, obtenerImagenNormalizadaProducto, importarImagenManual } = require("./catalogo-imagenes");
@@ -1581,6 +1583,8 @@ app.get("/admin/catalogo/pedidos", requerirAdministrador, async (req, res) => {
       limite: req.query.limite,
       estado: req.query.estado,
       busqueda: req.query.q,
+      fecha: req.query.fecha,
+      archivados: req.query.archivados,
     });
     res.json({ ok: true, ...resultado });
   } catch (error) {
@@ -1611,6 +1615,21 @@ app.patch("/admin/catalogo/pedidos/:numero/estado", requerirAdministrador, async
   } catch (error) {
     console.error("Error actualizando estado de pedido:", error);
     res.status(error.status || 400).json({ ok: false, mensaje: error.message || "No se pudo actualizar el estado" });
+  }
+});
+
+
+
+app.delete("/admin/catalogo/pedidos/:numero", requerirAdministrador, async (req, res) => {
+  try {
+    const pedido = await eliminarPedidoArchivadoCatalogoDb(req.params.numero);
+    res.json({ ok: true, pedido });
+  } catch (error) {
+    console.error("Error eliminando pedido archivado:", error);
+    res.status(error.status || 400).json({
+      ok: false,
+      mensaje: error.message || "No se pudo eliminar el pedido archivado",
+    });
   }
 });
 
@@ -6638,6 +6657,19 @@ function iniciarProgramadorNotificaciones() {
   );
 }
 
+let programadorAutoarchivoPedidos = null;
+let inicioAutoarchivoPedidos = null;
+function iniciarProgramadorAutoarchivoPedidos() {
+  if (programadorAutoarchivoPedidos) return;
+  const ejecutar = () =>
+    archivarPedidosDiasAnterioresDb().catch((error) =>
+      console.error("Error en autoarchivo diario de pedidos:", error),
+    );
+
+  programadorAutoarchivoPedidos = setInterval(ejecutar, 15 * 60 * 1000);
+  inicioAutoarchivoPedidos = setTimeout(ejecutar, 5000);
+}
+
 let programadorInventarioSheets = null;
 let inicioInventarioSheets = null;
 function iniciarProgramadorInventarioSheets() {
@@ -6703,6 +6735,7 @@ async function iniciarServidor() {
       );
       iniciarProgramadorNotificaciones();
       iniciarProgramadorInventarioSheets();
+      iniciarProgramadorAutoarchivoPedidos();
     });
   } catch (error) {
     console.error("No se pudo iniciar la aplicación en modo PostgreSQL único:", error.message);
@@ -6719,6 +6752,8 @@ async function cerrarServidor(signal) {
     if (inicioNotificaciones) clearTimeout(inicioNotificaciones);
     if (programadorInventarioSheets) clearInterval(programadorInventarioSheets);
     if (inicioInventarioSheets) clearTimeout(inicioInventarioSheets);
+    if (programadorAutoarchivoPedidos) clearInterval(programadorAutoarchivoPedidos);
+    if (inicioAutoarchivoPedidos) clearTimeout(inicioAutoarchivoPedidos);
     if (servidorHttp) {
       await new Promise((resolve) => servidorHttp.close(resolve));
       servidorHttp = null;

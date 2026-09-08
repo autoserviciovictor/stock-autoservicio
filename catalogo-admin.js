@@ -22,6 +22,7 @@ const estado = {
   pedidoAbierto: null,
   pedidoObservacionesSucias: false,
   pedidosBusquedaTimer: null,
+  pedidosFiltroRapido: "todos",
 };
 
 const esc = (v = "") => String(v).replace(/[&<>'"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[c]));
@@ -211,14 +212,48 @@ function etiquetaEstadoPedido(estadoPedido) {
 }
 
 function parametrosPedidos() {
+  const filtroRapido = estado.pedidosFiltroRapido || "todos";
+  const estadoSelect = $("catalogPedidosFiltroEstado")?.value || "todos";
+  const estadoPedido = ["recibido", "preparando", "listo", "entregado", "cancelado"].includes(filtroRapido)
+    ? filtroRapido
+    : estadoSelect;
+
   const p = new URLSearchParams({
     pagina: String(estado.pedidosPagina),
     limite: String(estado.pedidosLimite),
-    estado: $("catalogPedidosFiltroEstado")?.value || "todos",
+    estado: estadoPedido,
   });
+
+  if (filtroRapido === "hoy") p.set("fecha", "hoy");
+  if (filtroRapido === "archivados") p.set("archivados", "si");
+
   const q = $("catalogPedidosBuscar")?.value?.trim();
   if (q) p.set("q", q);
   return p.toString();
+}
+
+function actualizarFiltrosRapidosPedidos() {
+  document.querySelectorAll("[data-pedido-filtro]").forEach((boton) => {
+    const activo = boton.dataset.pedidoFiltro === estado.pedidosFiltroRapido;
+    boton.classList.toggle("activo", activo);
+    boton.setAttribute("aria-pressed", activo ? "true" : "false");
+  });
+}
+
+function aplicarFiltroRapidoPedidos(filtro) {
+  estado.pedidosFiltroRapido = filtro || "todos";
+
+  const selectEstado = $("catalogPedidosFiltroEstado");
+  if (selectEstado) {
+    if (["recibido", "preparando", "listo", "entregado", "cancelado"].includes(estado.pedidosFiltroRapido)) {
+      selectEstado.value = estado.pedidosFiltroRapido;
+    } else if (estado.pedidosFiltroRapido === "todos") {
+      selectEstado.value = "todos";
+    }
+  }
+
+  actualizarFiltrosRapidosPedidos();
+  cargarPedidos({ conservarPagina: false }).catch((e) => mensaje(e.message));
 }
 
 async function cargarResumenPedidos() {
@@ -258,9 +293,16 @@ function renderPedidos() {
         <td><div class="catalog-order-customer"><strong>${esc(p.cliente)}</strong><small>${esc(p.telefono)}</small></div></td>
         <td><div class="catalog-order-delivery"><strong>${p.entrega === "delivery" ? `Delivery ${esc(p.horario || "")}` : "Retiro"}</strong><small>${p.entrega === "delivery" ? esc(p.direccion || "") : "Retiro en autoservicio"}</small></div></td>
         <td><strong class="catalog-price">${moneda(p.total)}</strong></td>
-        <td><span class="catalog-order-status status-${esc(p.estado)}">${esc(etiquetaEstadoPedido(p.estado))}</span></td>
+        <td><span class="catalog-order-status status-${esc(p.estado)}">${esc(etiquetaEstadoPedido(p.estado))}</span>${p.archivado ? `<small class="catalog-order-archived-label">Archivado</small>` : ""}</td>
         <td>${fechaHora(p.creadoEn)}</td>
-        <td><button class="catalog-edit-btn" type="button" data-pedido-open="${esc(p.numero)}">Ver pedido</button></td>
+        <td>
+          <div class="catalog-order-row-actions">
+            <button class="catalog-edit-btn" type="button" data-pedido-open="${esc(p.numero)}">Ver pedido</button>
+            ${estado.pedidosFiltroRapido === "archivados"
+              ? `<button class="catalog-delete-btn" type="button" data-pedido-delete="${esc(p.numero)}">Eliminar</button>`
+              : ""}
+          </div>
+        </td>
       </tr>`).join("");
   }
 
@@ -272,6 +314,29 @@ function renderPedidos() {
 
   renderPaginacionPedidos();
   body.querySelectorAll("[data-pedido-open]").forEach((b) => b.addEventListener("click", () => abrirPedido(b.dataset.pedidoOpen)));
+  body.querySelectorAll("[data-pedido-delete]").forEach((b) => b.addEventListener("click", () => eliminarPedidoArchivado(b.dataset.pedidoDelete)));
+}
+
+async function eliminarPedidoArchivado(numeroPedido) {
+  if (!numeroPedido) return;
+
+  const confirmado = window.confirm(
+    `¿Eliminar definitivamente el pedido ${numeroPedido}?\n\nEsta acción no se puede deshacer.`,
+  );
+  if (!confirmado) return;
+
+  try {
+    await api(`/admin/catalogo/pedidos/${encodeURIComponent(numeroPedido)}`, {
+      method: "DELETE",
+    });
+    await Promise.all([
+      cargarPedidos({ conservarPagina: false }),
+      cargarResumenPedidos(),
+    ]);
+    mensaje(`Pedido ${numeroPedido} eliminado definitivamente.`, "ok");
+  } catch (e) {
+    mensaje(e.message);
+  }
 }
 
 function renderPaginacionPedidos() {
@@ -504,6 +569,7 @@ async function guardarEstadoPedido() {
     boton.disabled = false;
   }
 }
+
 
 function cambiarTab(tab) {
   estado.tab = ["rubros", "pedidos"].includes(tab) ? tab : "productos";
@@ -922,7 +988,15 @@ function bind() {
     clearTimeout(estado.pedidosBusquedaTimer);
     estado.pedidosBusquedaTimer = setTimeout(() => cargarPedidos({ conservarPagina: false }).catch((e) => mensaje(e.message)), 260);
   });
-  $("catalogPedidosFiltroEstado")?.addEventListener("change", () => cargarPedidos({ conservarPagina: false }).catch((e) => mensaje(e.message)));
+  $("catalogPedidosFiltroEstado")?.addEventListener("change", () => {
+    estado.pedidosFiltroRapido = "todos";
+    actualizarFiltrosRapidosPedidos();
+    cargarPedidos({ conservarPagina: false }).catch((e) => mensaje(e.message));
+  });
+  document.querySelectorAll("[data-pedido-filtro]").forEach((boton) => {
+    boton.addEventListener("click", () => aplicarFiltroRapidoPedidos(boton.dataset.pedidoFiltro));
+  });
+  actualizarFiltrosRapidosPedidos();
   $("catalogPedidosRecargar")?.addEventListener("click", () => Promise.all([cargarPedidos(), cargarResumenPedidos()]).catch((e) => mensaje(e.message)));
   $("catalogPedidoGuardarEstado")?.addEventListener("click", guardarEstadoPedido);
   $("catalogPedidoImprimir")?.addEventListener("click", imprimirPedidoCatalogo);

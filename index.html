@@ -38,6 +38,8 @@
     <link rel="stylesheet" href="horarios-redesign.css?v=1960-d21-cierre-etapa6-010926" />
     <link rel="stylesheet" href="tareas-redesign.css?v=1960-d21-cierre-etapa6-010926" />
     <link rel="stylesheet" href="admin-official.css?v=1960-d21-cierre-etapa6-010926" />
+    <link rel="stylesheet" href="catalogo-etapa9c.css?v=1960-d21-cierre-etapa6-010926" />
+    <link rel="stylesheet" href="catalogo-etapa9d.css?v=1960-d21-cierre-etapa6-010926" />
     <link rel="stylesheet" href="catalogo-admin.css?v=1960-d21-cierre-etapa6-010926" />
     <link rel="stylesheet" href="catalogo-etapa7.css?v=1960-d21-cierre-etapa6-010926" />
     <link rel="stylesheet" href="catalogo-etapa8a.css?v=1960-d21-cierre-etapa6-010926" />
@@ -3308,6 +3310,17 @@
               <article><small>Listos</small><strong id="catalogPedidosListos">—</strong><span>Para entregar</span></article>
               <article><small>Venta de hoy</small><strong id="catalogPedidosVentaHoy">—</strong><span>Sin cancelados</span></article>
             </section>
+
+            <div class="catalog-orders-quick-filters" id="catalogPedidosFiltrosRapidos" aria-label="Filtros rápidos de pedidos">
+              <button type="button" class="activo" data-pedido-filtro="todos" aria-pressed="true">Todos</button>
+              <button type="button" data-pedido-filtro="recibido" aria-pressed="false">Recibidos</button>
+              <button type="button" data-pedido-filtro="preparando" aria-pressed="false">Preparando</button>
+              <button type="button" data-pedido-filtro="listo" aria-pressed="false">Listos</button>
+              <button type="button" data-pedido-filtro="entregado" aria-pressed="false">Entregados</button>
+              <button type="button" data-pedido-filtro="cancelado" aria-pressed="false">Cancelados</button>
+              <button type="button" data-pedido-filtro="hoy" aria-pressed="false">Hoy</button>
+              <button type="button" data-pedido-filtro="archivados" aria-pressed="false">Archivados</button>
+            </div>
 
             <div class="catalog-orders-toolbar">
               <label class="catalog-search">

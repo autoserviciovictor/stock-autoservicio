@@ -81,6 +81,10 @@ async function asegurarEsquemaCatalogoPedidos() {
     )`);
     await query(`ALTER TABLE catalog_orders
       ADD COLUMN IF NOT EXISTS internal_notes TEXT NOT NULL DEFAULT ''`);
+    await query(`ALTER TABLE catalog_orders
+      ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ NULL`);
+    await query(`CREATE INDEX IF NOT EXISTS catalog_orders_archived_idx
+      ON catalog_orders(archived_at, created_at DESC)`);
 
     await query(`CREATE INDEX IF NOT EXISTS catalog_order_items_order_idx ON catalog_order_items(order_id, order_item_id)`);
 
@@ -307,17 +311,24 @@ async function marcarWhatsappAbiertoPedidoDb(numero) {
   return r.rowCount > 0;
 }
 
-async function listarPedidosCatalogoDb({ pagina = 1, limite = 50, estado = "", busqueda = "" } = {}) {
+async function listarPedidosCatalogoDb({ pagina = 1, limite = 50, estado = "", busqueda = "", fecha = "", archivados = "" } = {}) {
   await asegurarEsquemaCatalogoPedidos();
+  await archivarPedidosDiasAnterioresDb();
 
   const page = Math.max(1, Number(pagina) || 1);
   const max = Math.max(1, Math.min(100, Number(limite) || 50));
   const offset = (page - 1) * max;
   const e = texto(estado, 30);
   const q = texto(busqueda, 120).toLowerCase();
+  const f = texto(fecha, 20).toLowerCase();
+  const a = texto(archivados, 20).toLowerCase();
 
   const params = [];
   const where = [];
+
+  if (a === "si") where.push("o.archived_at IS NOT NULL");
+  else if (a === "todos") {}
+  else where.push("o.archived_at IS NULL");
 
   if (e && e !== "todos") {
     if (!ESTADOS_PEDIDO.includes(e)) {
@@ -325,6 +336,14 @@ async function listarPedidosCatalogoDb({ pagina = 1, limite = 50, estado = "", b
     }
     params.push(e);
     where.push(`o.status=$${params.length}`);
+  }
+
+  if (f) {
+    if (f !== "hoy") {
+      throw Object.assign(new Error("Filtro de fecha inválido"), { status: 400 });
+    }
+    where.push(`(o.created_at AT TIME ZONE 'America/Argentina/Buenos_Aires')::date =
+                (NOW() AT TIME ZONE 'America/Argentina/Buenos_Aires')::date`);
   }
 
   if (q) {
@@ -354,7 +373,7 @@ async function listarPedidosCatalogoDb({ pagina = 1, limite = 50, estado = "", b
   const r = await query(
     `SELECT o.order_id,o.order_number,o.customer_name,o.customer_phone,o.delivery_type,
             o.delivery_address,o.delivery_reference,o.delivery_time,o.payment_method,o.status,
-            o.total,o.item_units,o.item_lines,o.whatsapp_opened,o.internal_notes,o.created_at,o.updated_at
+            o.total,o.item_units,o.item_lines,o.whatsapp_opened,o.internal_notes,o.archived_at,o.created_at,o.updated_at
        FROM catalog_orders o
        ${sqlWhere}
       ORDER BY o.created_at DESC
@@ -382,6 +401,8 @@ async function listarPedidosCatalogoDb({ pagina = 1, limite = 50, estado = "", b
       unidades: Number(f.item_units) || 0,
       productos: Number(f.item_lines) || 0,
       whatsappAbierto: Boolean(f.whatsapp_opened),
+      archivado: Boolean(f.archived_at),
+      archivadoEn: f.archived_at,
       creadoEn: f.created_at,
       actualizadoEn: f.updated_at,
     })),
@@ -396,7 +417,7 @@ async function obtenerPedidoCatalogoAdminDb(numero) {
   const cab = await query(
     `SELECT o.order_id,o.order_number,o.customer_name,o.customer_phone,o.delivery_type,
             o.delivery_address,o.delivery_reference,o.delivery_time,o.payment_method,o.status,
-            o.total,o.item_units,o.item_lines,o.whatsapp_opened,o.internal_notes,o.created_at,o.updated_at
+            o.total,o.item_units,o.item_lines,o.whatsapp_opened,o.internal_notes,o.archived_at,o.created_at,o.updated_at
        FROM catalog_orders o
       WHERE o.order_number=$1
       LIMIT 1`,
@@ -436,6 +457,8 @@ async function obtenerPedidoCatalogoAdminDb(numero) {
     unidades: Number(f.item_units) || 0,
     productos: Number(f.item_lines) || 0,
     whatsappAbierto: Boolean(f.whatsapp_opened),
+    archivado: Boolean(f.archived_at),
+    archivadoEn: f.archived_at,
     observacionesInternas: String(f.internal_notes || ""),
     creadoEn: f.created_at,
     actualizadoEn: f.updated_at,
@@ -526,8 +549,59 @@ async function actualizarObservacionesPedidoCatalogoDb(numero, observaciones = "
   return obtenerPedidoCatalogoAdminDb(n);
 }
 
+
+async function archivarPedidosDiasAnterioresDb() {
+  await asegurarEsquemaCatalogoPedidos();
+
+  const r = await query(
+    `UPDATE catalog_orders
+        SET archived_at=NOW(), updated_at=NOW()
+      WHERE archived_at IS NULL
+        AND (created_at AT TIME ZONE 'America/Argentina/Buenos_Aires')::date <
+            (NOW() AT TIME ZONE 'America/Argentina/Buenos_Aires')::date
+      RETURNING order_id`,
+  );
+
+  return Number(r.rowCount) || 0;
+}
+
+async function eliminarPedidoArchivadoCatalogoDb(numero) {
+  await asegurarEsquemaCatalogoPedidos();
+
+  const n = texto(numero, 40);
+  if (!n) throw Object.assign(new Error("Pedido inválido"), { status: 400 });
+
+  const r = await query(
+    `DELETE FROM catalog_orders
+      WHERE order_number=$1
+        AND archived_at IS NOT NULL
+      RETURNING order_id, order_number`,
+    [n],
+  );
+
+  if (!r.rowCount) {
+    const existe = await query(
+      `SELECT archived_at FROM catalog_orders WHERE order_number=$1 LIMIT 1`,
+      [n],
+    );
+    if (!existe.rowCount) {
+      throw Object.assign(new Error("Pedido no encontrado"), { status: 404 });
+    }
+    throw Object.assign(
+      new Error("Solo se pueden eliminar pedidos archivados."),
+      { status: 400 },
+    );
+  }
+
+  return {
+    id: Number(r.rows[0].order_id),
+    numero: String(r.rows[0].order_number),
+  };
+}
+
 async function obtenerResumenPedidosCatalogoDb() {
   await asegurarEsquemaCatalogoPedidos();
+  await archivarPedidosDiasAnterioresDb();
   const r = await query(
     `SELECT
        COUNT(*)::int AS total,
@@ -541,7 +615,8 @@ async function obtenerResumenPedidosCatalogoDb() {
            AND (created_at AT TIME ZONE 'America/Argentina/Buenos_Aires')::date =
                (NOW() AT TIME ZONE 'America/Argentina/Buenos_Aires')::date
        ),0)::numeric AS venta_hoy
-     FROM catalog_orders`
+     FROM catalog_orders
+    WHERE archived_at IS NULL`
   );
   const x = r.rows[0] || {};
   return {
@@ -569,5 +644,7 @@ module.exports = {
   obtenerPedidoCatalogoAdminDb,
   actualizarEstadoPedidoCatalogoDb,
   actualizarObservacionesPedidoCatalogoDb,
+  archivarPedidosDiasAnterioresDb,
+  eliminarPedidoArchivadoCatalogoDb,
   obtenerResumenPedidosCatalogoDb,
 };
